@@ -84,7 +84,7 @@ struct proto udppp_prot = {
 //	.sysctl_mem		= sysctl_udp_mem,
 //	.sysctl_wmem_offset     = offsetof(struct net, ipv4.sysctl_udp_wmem_min),
 //	.sysctl_rmem_offset     = offsetof(struct net, ipv4.sysctl_udp_rmem_min),
-	.obj_size		= sizeof(struct udp6_sock),
+	.obj_size		= sizeof(struct udppp_sock),
 	.h.udp_table		= &udp_table,
 #ifdef CONFIG_COMPAT
 	//.compat_setsockopt	= compat_udpv6_setsockopt,

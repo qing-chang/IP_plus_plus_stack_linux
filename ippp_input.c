@@ -1,14 +1,14 @@
 /*
  * 	Main IPPP Receive routine.
  */
-static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
+/*static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
 {
 	const struct ippphdr *ippph;
 	u32 len;
 
 	/* When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
-	 */
+	 * /
 	if (skb->pkt_type == PACKET_OTHERHOST)
 		goto drop;
 
@@ -34,7 +34,7 @@ static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
 	 *	2.	Version of 4
 	 *	3.	Checksums correctly. [Speed optimisation for later, skip loopback checksums]
 	 *	4.	Doesn't have a bogus length
-	 */
+	 * /
 
 	if (iph->ihl < 5 || iph->version != 0)
 		goto inhdr_error;
@@ -64,7 +64,7 @@ static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
 	/* Our transport medium may have padded the buffer out. Now we know it
 	 * is IP we can trim to the true length of the frame.
 	 * Note this now means skb->len holds ntohs(iph->tot_len).
-	 */
+	 * /
 	if (pskb_trim_rcsum(skb, len)) {
 		__IP_INC_STATS(net, IPSTATS_MIB_INDISCARDS);
 		goto drop;
@@ -73,11 +73,11 @@ static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
 	iph = ip_hdr(skb);
 	skb->transport_header = skb->network_header + iph->ihl*4;
 
-	/* Remove any debris in the socket control block */
+	/* Remove any debris in the socket control block * /
 	memset(IPCB(skb), 0, sizeof(struct inet_skb_parm));
 	IPCB(skb)->iif = skb->skb_iif;
 
-	/* Must drop socket now because of tproxy. */
+	/* Must drop socket now because of tproxy. * /
 	skb_orphan(skb);
 
 	return skb;
@@ -91,6 +91,7 @@ drop:
 out:
 	return NULL;
 }
+*/
 
 /*
  * IPPP receive entry point
@@ -99,7 +100,7 @@ int ippp_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 {
 	struct net *net = dev_net(dev);
 
-	skb = ippp_rcv_core(skb, net);
+	//skb = ippp_rcv_core(skb, net);
 	if (skb == NULL)
 		return NET_RX_DROP;
 

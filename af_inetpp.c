@@ -159,7 +159,7 @@ int inetpp_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (sk->sk_prot->bind) {
 		return sk->sk_prot->bind(sk, uaddr, addr_len);
 	}
-	if (addr_len < sizeof(struct sockaddr_in))
+	if (addr_len < sizeof(struct sockaddr_ippp))
 		return -EINVAL;
 
 	/* BPF prog is run before any checks are done so that if the prog
@@ -470,7 +470,7 @@ static const struct net_proto_family inetpp_family_ops = {
 
 static struct packet_type ippp_packet_type __read_mostly = {
 	.type = cpu_to_be16(ETH_P_IPPP),
-//	.func = ippp_rcv,
+	.func = ippp_rcv,
 };
 
 static int __init inetpp_init(void)
