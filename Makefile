@@ -3,7 +3,7 @@ CONFIG_MODULE_SIG_ALL=n
 
 #ifneq ($(KERNELRELEASE),)
 obj-m += ippp.o  
-ippp-objs := af_inetpp.o udp.o protocol.o
+ippp-objs := af_inetpp.o udp.o protocol.o ippp_input.o route.o
 #else
 KERNELDIR ?= /lib/modules/$(shell uname -r)/build
 PWD       := $(shell pwd)

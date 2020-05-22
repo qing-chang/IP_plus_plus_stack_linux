@@ -45,6 +45,7 @@
 #include <linux/uaccess.h>
 #include <linux/mroute6.h>
 #include "ippp.h"
+
 /*由于linux内核源码中没有为新协议族预留协议号，所以原则上需修改内核源码并重新编译，
 这样很不方便。因此这里选择借用linux内核中并未真正实现的AF_IPX的协议族号*/
 #define AF_INETPP 4
@@ -454,7 +455,7 @@ lookup_protocol:
 			goto out;
 		}
 	}
-/**/
+
 out:
 	return err;
 out_rcu_unlock:
@@ -471,6 +472,7 @@ static const struct net_proto_family inetpp_family_ops = {
 static struct packet_type ippp_packet_type __read_mostly = {
 	.type = cpu_to_be16(ETH_P_IPPP),
 	.func = ippp_rcv,
+	//.list_func = ip_list_rcv,
 };
 
 static int __init inetpp_init(void)
