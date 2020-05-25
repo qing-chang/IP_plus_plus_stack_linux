@@ -20,7 +20,7 @@
 extern struct proto udppp_prot;
 extern const struct proto_ops inetpp_dgram_ops;
 extern struct udp_table udp_table;
-
+//
 struct ippp_addr {
 	__u8    type;
 	__u8	base:4,
