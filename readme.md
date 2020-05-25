@@ -1,3 +1,91 @@
 
-#注解
+Network end to end solution that is especially applicable to the Internet of things 
+对IPv4的扩展方案，用以实现全面端到端互联，有较好的兼容性，能替代IPv6，尤其适用与物联网。
+#关于注解
 本软件中的注解，暂时只提供中文版，下一步将使用GKPL（通用知识处理语言），GKPL可以简单理解为结构化的自然语言，可以方便地由软件自动完成不同语言版本间的精确翻译
+{
+    class:5,
+    ip:'1.1.1.3',
+    nets:[
+        [{ //class0
+            id:'0'
+        }],
+        [{  //class1
+            id:'1',
+            gates:[{
+                net:'0',
+                wip:'1.1.1.1',
+                lip:'1.1.1.1'
+            }]
+        },
+        {
+            id:'3',
+            virtual:true,
+            gates:[{
+                net:'0',
+                wip:'1.1.1.2',
+                lip:'1.1.1.1'
+            }]
+        }],
+        [{  //class2
+            id:'2',
+            gates:[{
+                net:'1',
+                wip:'1.1.1.2',
+                lip:'1.1.1.1'
+            }]
+        },
+        {
+            id:'4',
+            virtual:true,
+            gates:[{
+                net:'3',
+                wip:'1.1.1.2',
+                lip:'1.1.1.1'
+            }]
+        }],
+        [{  //class3
+            id:'5',
+            gates:[{
+                net:'2',
+                wip:'1.1.1.2',
+                lip:'1.1.1.1'
+            },
+            {
+                net:'4',
+                wip:'1.1.1.2',
+                lip:'1.1.1.2'
+            }]
+        }],
+        [{  //class4
+            id:'6',
+            gates:[{
+                net:'5',
+                wip:'1.1.1.3',
+                lip:'1.1.1.1'
+            }]
+        },
+        {
+            id:'7',
+            virtual:true,
+            gates:[{
+                net:'5',
+                wip:'1.1.1.4',
+                lip:'1.1.1.1'
+            }]
+        }],
+        [{  //class5
+            id:'8',
+            gates:[{
+                net:'6',
+                wip:'1.1.1.2',
+                lip:'1.1.1.1'
+            },
+            {
+                net:'7',
+                wip:'1.1.1.2',
+                lip:'1.1.1.2'
+            }]
+        }]
+    ]
+}

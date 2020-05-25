@@ -99,3 +99,15 @@ static inline struct ippphdr *ippp_hdr(const struct sk_buff *skb)
 {
 	return (struct ippphdr *)skb_network_header(skb);
 }
+
+__u32 addr_pp_to_v4(struct ippp_addr addr_pp)
+{
+	return addr_pp.addr[addr_pp.len];
+}
+
+struct ippp_addr addr_v4_to_pp(__u32 addr_v4, _u8 absolute, int dst_or_src)
+{
+	struct ippp_addr addr_pp;
+	addr_pp.type=absolute;
+	return addr_pp;
+}
