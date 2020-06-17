@@ -50,6 +50,7 @@ static struct net_protocol udppp_protocol = {
     .no_policy = 1,
     .netns_ok = 1,
 };
+
 int udppp_get_port(struct sock *sk, unsigned short snum)
 {
 	unsigned int hash2_nulladdr =
@@ -61,6 +62,7 @@ int udppp_get_port(struct sock *sk, unsigned short snum)
 	udp_sk(sk)->udp_portaddr_hash = hash2_partial;
 	return udp_lib_get_port(sk, snum, hash2_nulladdr);
 }
+
 struct proto udppp_prot = {
 	.name			= "UDPPP",
 	.owner			= THIS_MODULE,

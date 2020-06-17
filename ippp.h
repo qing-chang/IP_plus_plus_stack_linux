@@ -1,3 +1,7 @@
+
+#ifndef _IPPP_H
+#define _IPPP_H
+
 #include <net/udp.h>
 #include <net/udplite.h>
 #include <net/protocol.h>
@@ -20,6 +24,7 @@
 extern struct proto udppp_prot;
 extern const struct proto_ops inetpp_dgram_ops;
 extern struct udp_table udp_table;
+extern struct net_protocol __rcu *inetpp_protos[MAX_INET_PROTOS];
 
 struct ippp_addr {
 	__u8    type;
@@ -90,24 +95,26 @@ int ippp_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 
 static inline u32 ipv4_portaddr_hash(const struct net *net,
 				     __be32 saddr,
-				     unsigned int port)
-{
-	return jhash_1word((__force u32)saddr, net_hash_mix(net)) ^ port;
-}
+				     unsigned int port);
+// {
+// 	return jhash_1word((__force u32)saddr, net_hash_mix(net)) ^ port;
+// }
 
 static inline struct ippphdr *ippp_hdr(const struct sk_buff *skb)
 {
 	return (struct ippphdr *)skb_network_header(skb);
 }
 
-__u32 addr_pp_to_v4(struct ippp_addr addr_pp)
-{
-	return addr_pp.addr[addr_pp.len];
-}
+// __u32 addr_pp_to_v4(struct ippp_addr addr_pp)
+// {
+// 	return addr_pp.addr[addr_pp.len];
+// }
 
-struct ippp_addr addr_v4_to_pp(__u32 addr_v4, _u8 absolute, int dst_or_src)
-{
-	struct ippp_addr addr_pp;
-	addr_pp.type=absolute;
-	return addr_pp;
-}
+// struct ippp_addr addr_v4_to_pp(__u32 addr_v4, __u8 absolute, int dst_or_src)
+// {
+// 	struct ippp_addr addr_pp;
+// 	addr_pp.type=absolute;
+// 	return addr_pp;
+// }
+
+#endif	/* _IPPP_H */

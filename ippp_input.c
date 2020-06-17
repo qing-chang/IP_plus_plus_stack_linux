@@ -33,17 +33,13 @@
 #include <net/dst_metadata.h>
 #include "ippp.h"
 
-static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
+void ippp_protocol_deliver_rcu(struct net *net, struct sk_buff *skb, int protocol)
 {
-	__skb_pull(skb, skb_network_header_len(skb));
-
-	rcu_read_lock();
-	int protocol = ip_hdr(skb)->protocol;
 	const struct net_protocol *ipprot;
 	int raw, ret;
 
 resubmit:
-	raw = raw_local_deliver(skb, protocol);
+	//raw = raw_local_deliver(skb, protocol);
 
 	ipprot = rcu_dereference(inet_protos[protocol]);
 	if (ipprot) {
@@ -74,6 +70,13 @@ resubmit:
 			consume_skb(skb);
 		}
 	}
+}
+static int ippp_local_deliver_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
+{
+	__skb_pull(skb, skb_network_header_len(skb));
+
+	rcu_read_lock();
+	ippp_protocol_deliver_rcu(net, skb, ip_hdr(skb)->protocol);
 	rcu_read_unlock();
 
 	return 0;
@@ -82,7 +85,7 @@ resubmit:
 /*
  * 	Deliver IP Packets to the higher protocol layers.
  */
-int ip_local_deliver(struct sk_buff *skb)
+int ippp_local_deliver(struct sk_buff *skb)
 {
 	/*
 	 *	Reassemble IP fragments.
@@ -96,7 +99,7 @@ int ip_local_deliver(struct sk_buff *skb)
 
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_IN,
 		       net, NULL, skb, skb->dev, NULL,
-		       ip_local_deliver_finish);
+		       ippp_local_deliver_finish);
 }
 
 static int ip_rcv_finish_core(struct net *net, struct sock *sk,
@@ -107,65 +110,65 @@ static int ip_rcv_finish_core(struct net *net, struct sock *sk,
 	int (*edemux)(struct sk_buff *skb);
 	struct rtable *rt;
 	int err;
-/*
-	if (ip_can_use_hint(skb, iph, hint)) {
-		err = ip_route_use_hint(skb, iph->daddr, iph->saddr, iph->tos,
-					dev, hint);
-		if (unlikely(err))
-			goto drop_error;
-	}
 
-	if (net->ipv4.sysctl_ip_early_demux &&
-	    !skb_dst(skb) &&
-	    !skb->sk &&
-	    !ip_is_fragment(iph)) {
-		const struct net_protocol *ipprot;
-		int protocol = iph->protocol;
+// 	if (ip_can_use_hint(skb, iph, hint)) {
+// 		err = ip_route_use_hint(skb, iph->daddr, iph->saddr, iph->tos,
+// 					dev, hint);
+// 		if (unlikely(err))
+// 			goto drop_error;
+// 	}
 
-		ipprot = rcu_dereference(inet_protos[protocol]);
-		if (ipprot && (edemux = READ_ONCE(ipprot->early_demux))) {
-			err = INDIRECT_CALL_2(edemux, tcp_v4_early_demux,
-					      udp_v4_early_demux, skb);
-			if (unlikely(err))
-				goto drop_error;
-			/* must reload iph, skb->head might have changed * /
-			iph = ip_hdr(skb);
-		}
-	}
+// 	if (net->ipv4.sysctl_ip_early_demux &&
+// 	    !skb_dst(skb) &&
+// 	    !skb->sk &&
+// 	    !ip_is_fragment(iph)) {
+// 		const struct net_protocol *ipprot;
+// 		int protocol = iph->protocol;
 
-	/*
-	 *	Initialise the virtual path cache for the packet. It describes
-	 *	how the packet travels inside Linux networking.
-	 * /
-	if (!skb_valid_dst(skb)) {
-		err = ip_route_input_noref(skb, iph->daddr, iph->saddr,
-					   iph->tos, dev);
-		if (unlikely(err))
-			goto drop_error;
-	}
+// 		ipprot = rcu_dereference(inetpp_protos[protocol]);
+// 		if (ipprot && (edemux = READ_ONCE(ipprot->early_demux))) {
+// 			err = INDIRECT_CALL_2(edemux, tcp_v4_early_demux,
+// 					      udp_v4_early_demux, skb);
+// 			if (unlikely(err))
+// 				goto drop_error;
+// 			/* must reload iph, skb->head might have changed */
+// 			iph = ip_hdr(skb);
+// 		}
+// 	}
 
-#ifdef CONFIG_IP_ROUTE_CLASSID
-	if (unlikely(skb_dst(skb)->tclassid)) {
-		struct ip_rt_acct *st = this_cpu_ptr(ip_rt_acct);
-		u32 idx = skb_dst(skb)->tclassid;
-		st[idx&0xFF].o_packets++;
-		st[idx&0xFF].o_bytes += skb->len;
-		st[(idx>>16)&0xFF].i_packets++;
-		st[(idx>>16)&0xFF].i_bytes += skb->len;
-	}
-#endif
+// 	/*
+// 	 *	Initialise the virtual path cache for the packet. It describes
+// 	 *	how the packet travels inside Linux networking.
+// 	 */
+// 	if (!skb_valid_dst(skb)) {
+// 		err = ip_route_input_noref(skb, iph->daddr, iph->saddr,
+// 					   iph->tos, dev);
+// 		if (unlikely(err))
+// 			goto drop_error;
+// 	}
 
-	if (iph->ihl > 5 && ip_rcv_options(skb, dev))
-		goto drop;
+// #ifdef CONFIG_IP_ROUTE_CLASSID
+// 	if (unlikely(skb_dst(skb)->tclassid)) {
+// 		struct ip_rt_acct *st = this_cpu_ptr(ip_rt_acct);
+// 		u32 idx = skb_dst(skb)->tclassid;
+// 		st[idx&0xFF].o_packets++;
+// 		st[idx&0xFF].o_bytes += skb->len;
+// 		st[(idx>>16)&0xFF].i_packets++;
+// 		st[(idx>>16)&0xFF].i_bytes += skb->len;
+// 	}
+// #endif
 
-	rt = skb_rtable(skb);
-	if (rt->rt_type == RTN_MULTICAST) {
-		__IP_UPD_PO_STATS(net, IPSTATS_MIB_INMCAST, skb->len);
-	} else if (rt->rt_type == RTN_BROADCAST) {
-		__IP_UPD_PO_STATS(net, IPSTATS_MIB_INBCAST, skb->len);
-	} else if (skb->pkt_type == PACKET_BROADCAST ||
-		   skb->pkt_type == PACKET_MULTICAST) {
-		struct in_device *in_dev = __in_dev_get_rcu(dev);
+// 	if (iph->ihl > 5 && ip_rcv_options(skb, dev))
+// 		goto drop;
+
+// 	rt = skb_rtable(skb);
+// 	if (rt->rt_type == RTN_MULTICAST) {
+// 		__IP_UPD_PO_STATS(net, IPSTATS_MIB_INMCAST, skb->len);
+// 	} else if (rt->rt_type == RTN_BROADCAST) {
+// 		__IP_UPD_PO_STATS(net, IPSTATS_MIB_INBCAST, skb->len);
+// 	} else if (skb->pkt_type == PACKET_BROADCAST ||
+// 		   skb->pkt_type == PACKET_MULTICAST) {
+// 		struct in_device *in_dev = __in_dev_get_rcu(dev);
 
 		/* RFC 1122 3.3.6:
 		 *
@@ -199,7 +202,7 @@ drop_error:
 	goto drop;
 }
 
-static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
+static int ippp_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	struct net_device *dev = skb->dev;
 	int ret;
@@ -322,5 +325,5 @@ int ippp_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 
 	return 0;NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 		       net, NULL, skb, dev, NULL,
-		       ip_rcv_finish);
+		       ippp_rcv_finish);
 }
