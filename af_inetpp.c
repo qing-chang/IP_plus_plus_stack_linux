@@ -307,8 +307,7 @@ void inetpp_unregister_protosw(struct inet_protosw *p)
 }
 EXPORT_SYMBOL(inetpp_unregister_protosw);
 
-static int inetpp_create(struct net *net, struct socket *sock, int protocol,
-		       int kern)
+static int inetpp_create(struct net *net, struct socket *sock, int protocol, int kern)
 {
 	struct sock *sk;
 	struct inet_protosw *answer;
@@ -371,8 +370,7 @@ lookup_protocol:
 
 
 	err = -EPERM;
-	if (sock->type == SOCK_RAW && !kern &&
-	    !ns_capable(net->user_ns, CAP_NET_RAW))
+	if (sock->type == SOCK_RAW && !kern && !ns_capable(net->user_ns, CAP_NET_RAW))
 		goto out_rcu_unlock;
 
 	sock->ops = answer->ops;
@@ -402,10 +400,10 @@ lookup_protocol:
 			inet->hdrincl = 1;
 	}
 
-	if (net->ipv4.sysctl_ip_no_pmtu_disc)
-		inet->pmtudisc = IP_PMTUDISC_DONT;
-	else
-		inet->pmtudisc = IP_PMTUDISC_WANT;
+	// if (net->ipv4.sysctl_ip_no_pmtu_disc)
+	// 	inet->pmtudisc = IP_PMTUDISC_DONT;
+	// else
+	// 	inet->pmtudisc = IP_PMTUDISC_WANT;
 
 	inet->inet_id = 0;
 
