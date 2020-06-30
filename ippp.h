@@ -100,6 +100,18 @@ static inline u32 ipv4_portaddr_hash(const struct net *net,
 // 	return jhash_1word((__force u32)saddr, net_hash_mix(net)) ^ port;
 // }
 
+static inline int realLen(struct sockaddr *uaddr)
+{
+	struct sockaddr_ippp *addr = (struct sockaddr_ippp *)uaddr; 	
+	return (addr->sin_addr.len+1)*4+2;
+}
+
+static inline __be32 leafAddr(struct sockaddr *uaddr)
+{
+	struct sockaddr_ippp *addr = (struct sockaddr_ippp *)uaddr; 	
+	return addr->sin_addr.addr[addr->sin_addr.len];
+}
+
 static inline struct ippphdr *ippp_hdr(const struct sk_buff *skb)
 {
 	return (struct ippphdr *)skb_network_header(skb);
