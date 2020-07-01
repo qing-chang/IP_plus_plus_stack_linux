@@ -117,6 +117,11 @@ static inline struct ippphdr *ippp_hdr(const struct sk_buff *skb)
 	return (struct ippphdr *)skb_network_header(skb);
 }
 
+static inline struct udppp_sock *udpppsk(const struct sock *sk)
+{
+	return (struct udppp_sock *)sk;
+}
+
 // __u32 addr_pp_to_v4(struct ippp_addr addr_pp)
 // {
 // 	return addr_pp.addr[addr_pp.len];

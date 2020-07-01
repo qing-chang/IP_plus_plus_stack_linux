@@ -59,8 +59,9 @@ static DEFINE_SPINLOCK(inetswpp_lock);
 int __inetpp_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 		bool force_bind_address_no_port, bool with_lock)
 {
-	struct sockaddr_in *addr = (struct sockaddr_in *)uaddr;
+	struct sockaddr_ippp *addr = (struct sockaddr_ippp *)uaddr;
 	struct inet_sock *inet = inet_sk(sk);
+	struct udppp_sock *udpppsk = udpppsk(sk);
 	struct net *net = sock_net(sk);
 	unsigned short snum;
 	int chk_addr_ret;
@@ -73,12 +74,12 @@ int __inetpp_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 		 */
 		err = -EAFNOSUPPORT;
 		if (addr->sin_family != AF_UNSPEC ||
-		    addr->sin_addr.s_addr != htonl(INADDR_ANY))
+		    leafAddr(addr) != htonl(INADDR_ANY))
 			goto out;
 	}
 
-	tb_id = l3mdev_fib_table_by_index(net, sk->sk_bound_dev_if) ? : tb_id;
-	chk_addr_ret = inet_addr_type_table(net, addr->sin_addr.s_addr, tb_id);
+//	tb_id = l3mdev_fib_table_by_index(net, sk->sk_bound_dev_if) ? : tb_id;
+//	chk_addr_ret = inet_addr_type_table(net, addr->sin_addr.s_addr, tb_id);
 
 	/* Not specified by any standard per-se, however it breaks too
 	 * many applications when removed.  It is unfortunate since
@@ -87,13 +88,13 @@ int __inetpp_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 	 * (ie. your servers still start up even if your ISDN link
 	 *  is temporarily down)
 	 */
-	err = -EADDRNOTAVAIL;
-	if (//!inet_can_nonlocal_bind(net, inet) &&
-	    addr->sin_addr.s_addr != htonl(INADDR_ANY) &&
-	    chk_addr_ret != RTN_LOCAL &&
-	    chk_addr_ret != RTN_MULTICAST &&
-	    chk_addr_ret != RTN_BROADCAST)
-		goto out;
+	// err = -EADDRNOTAVAIL;
+	// if (//!inet_can_nonlocal_bind(net, inet) &&
+	//     addr->sin_addr.s_addr != htonl(INADDR_ANY) &&
+	//     chk_addr_ret != RTN_LOCAL &&
+	//     chk_addr_ret != RTN_MULTICAST &&
+	//     chk_addr_ret != RTN_BROADCAST)
+	// 	goto out;
 
 	snum = ntohs(addr->sin_port);
 	err = -EACCES;
@@ -116,9 +117,10 @@ int __inetpp_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 	if (sk->sk_state != TCP_CLOSE || inet->inet_num)
 		goto out_release_sock;
 
-	inet->inet_rcv_saddr = inet->inet_saddr = addr->sin_addr.s_addr;
-	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
-		inet->inet_saddr = 0;  /* Use device */
+	inet->inet_rcv_saddr = inet->inet_saddr = leafAddr(addr);
+	udpppsk->inetpp.saddr = addr->sin_addr;
+	// if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
+	// 	inet->inet_saddr = 0;  /* Use device */
 
 	/* Make sure we are allowed to bind here. */
 	if (snum || !(inet->bind_address_no_port ||
@@ -142,7 +144,7 @@ int __inetpp_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 	inet->inet_sport = htons(inet->inet_num);
 	inet->inet_daddr = 0;
 	inet->inet_dport = 0;
-	sk_dst_reset(sk);
+//	sk_dst_reset(sk);
 	err = 0;
 out_release_sock:
 	if (with_lock)
@@ -160,15 +162,15 @@ int inetpp_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (sk->sk_prot->bind) {
 		return sk->sk_prot->bind(sk, uaddr, addr_len);
 	}
-	if (addr_len < sizeof(struct sockaddr_ippp))
+	if (addr_len < realLen(uaddr))
 		return -EINVAL;
 
 	/* BPF prog is run before any checks are done so that if the prog
 	 * changes context in a wrong way it will be caught.
 	 */
 	//err = BPF_CGROUP_RUN_PROG_INET4_BIND(sk, uaddr);
-	if (err)
-		return err;
+	// if (err)
+	// 	return err;
 
 	return __inetpp_bind(sk, uaddr, addr_len, false, true);
 }
