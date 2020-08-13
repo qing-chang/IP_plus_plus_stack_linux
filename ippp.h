@@ -21,6 +21,13 @@
 #include <net/snmp.h>
 #include <net/netns/hash.h>
 
+/*由于linux内核源码中没有为新协议族预留协议号，所以原则上需修改内核源码并重新编译，
+这样很不方便。因此这里选择借用linux内核中并未真正实现的AF_IPX的协议族号*/
+#define AF_INETPP 4
+#define PF_INETPP AF_INETPP
+#define ETH_P_IPPP 0x0810 /* Internet Protocol Plus Plus packet */
+#define NFPROTO_IPPP 11
+
 extern struct proto udppp_prot;
 extern const struct proto_ops inetpp_dgram_ops;
 extern struct udp_table udp_table;
@@ -45,27 +52,41 @@ struct ippphdr{
 	__be16 tot_len;
 	__u8   ttl;
 	__u8   protocol;
-	__u8   exthdr_num;
+	__u8   ext_hdr_num;
 	__u8  flow_label[2];
 //#if defined(__LITTLE_ENDIAN_BITFIELD)
-			 unsigned char x:6,
-       source_type:1,
-					 dst_type:1;
-__u8	 dst_len:4,
-		  dst_base:4;
-__u8     source_len:4,
-		  source_base:4;
+	unsigned char x:6,
+		   src_type:1,
+		   dst_type:1;
+	__u8	dst_len:4,
+		   dst_base:4;
+	__u8 	src_len:4,
+		   src_base:4;
 //#else
 //unsigned char x:6,     
 	//	dst_type:1,
-//		  source_type:1;
+//		  src_type:1;
 //__u8	 dst_base:4,
 //		  dst_len:4;
-//__u8  source_base:4,
-//	   source_len:4;
+//__u8  src_base:4,
+//	   src_len:4;
 //#endif
 	__u32 addr[0];
 };
+
+struct ext_hdr_addr{
+	__u16 addr[0];
+};
+
+// //乘方函数
+// static inline int power(int x,int n)
+// {
+// 	int i;
+// 	int s=1;
+// 	for(i=1; i<=n; i++)    //利用循环进行计算，n次方就是把x乘上n遍
+// 	   s*=x;
+//    return s;
+// }
 
 struct sockaddr_ippp {
   __kernel_sa_family_t	sin_family;
@@ -84,21 +105,18 @@ struct udppp_sock {
 	struct ippp_pinfo inetpp;
 };
 
+int udppp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock,int flags, int *addr_len);
+int udppp_rcv(struct sk_buff *skb);
 int udppp_init(void);
 void udppp_exit(void);
 int inetpp_add_protocol(const struct net_protocol *prot, unsigned char protocol);
 int inetpp_del_protocol(const struct net_protocol *prot, unsigned char protocol);
 int inetpp_register_protosw(struct inet_protosw *p);
 void inetpp_unregister_protosw(struct inet_protosw *p);
-int ippp_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr, u8 tos, struct net_device *dev);
+int ippp_route_input_noref(struct sk_buff *skb, struct net_device *dev);
 int ippp_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, struct net_device *orig_dev);
 
-static inline u32 ipv4_portaddr_hash(const struct net *net,
-				     __be32 saddr,
-				     unsigned int port);
-// {
-// 	return jhash_1word((__force u32)saddr, net_hash_mix(net)) ^ port;
-// }
+static inline u32 ipv4_portaddr_hash(const struct net *net, __be32 saddr, unsigned int port);
 
 static inline int realLen(struct sockaddr *uaddr)
 {
@@ -106,9 +124,8 @@ static inline int realLen(struct sockaddr *uaddr)
 	return (addr->sin_addr.len+1)*4+2;
 }
 
-static inline __be32 leafAddr(struct sockaddr *uaddr)
+static inline __be32 leafAddr(struct sockaddr_ippp *addr)
 {
-	struct sockaddr_ippp *addr = (struct sockaddr_ippp *)uaddr; 	
 	return addr->sin_addr.addr[addr->sin_addr.len];
 }
 
@@ -117,7 +134,26 @@ static inline struct ippphdr *ippp_hdr(const struct sk_buff *skb)
 	return (struct ippphdr *)skb_network_header(skb);
 }
 
-static inline struct udppp_sock *udpppsk(const struct sock *sk)
+static inline struct ext_hdr_addr *ext_hdr_addr(const struct ippphdr *ippph)
+{
+	if(ippph->ext_hdr_num!=0)
+		return (struct ext_hdr_addr *)ippph->addr[2<<ippph->ihl];
+	else
+		return NULL;
+}
+
+static inline u32 hdr_len(const struct ippphdr *ippph)
+{
+	if(ippph->ext_hdr_num==0)
+		return 12 + (8<<ippph->ihl);
+	else
+	{
+		struct ext_hdr_addr *exhrad = ext_hdr_addr(ippph);
+		return ntohs(exhrad->addr[ippph->ext_hdr_num-2]);
+	}
+}
+
+static inline struct udppp_sock *udppp_sk(const struct sock *sk)
 {
 	return (struct udppp_sock *)sk;
 }
@@ -133,5 +169,49 @@ static inline struct udppp_sock *udpppsk(const struct sock *sk)
 // 	addr_pp.type=absolute;
 // 	return addr_pp;
 // }
+
+static inline void u32tostr(__u32 dat,char *str)
+{
+	char temp[20];
+	unsigned char i=0,j=0;
+	while(dat)
+	{
+		temp[j]=dat%10+0x30;
+		j++;
+		dat/=10;
+	}
+	for(i=0;i<j;i++)
+	{
+		str[i]=temp[j-i-1];
+	}
+	if(i==0)str[i++]='0';
+	str[i]=0;
+}
+
+static inline void IP4tostr(__u32 ip,char *str)
+{
+	char temp[5];
+	__u8 t,i,j,k,l=0;
+	for(i=0;i<4;i++)
+	{
+		t=ip%256;
+		ip/=256;
+		j=0;
+		while(t)
+		{
+			temp[j]=t%10+0x30;
+			j++;
+			t/=10;
+		}
+		for(k=0;k<j;k++)
+		{
+			str[l+k]=temp[j-k-1];
+		}
+		if(k==0)str[l+k++]='0';
+		if(i!=3)str[l+k++]='.';
+		l+=k;
+	}
+	str[l]=0;
+}
 
 #endif	/* _IPPP_H */

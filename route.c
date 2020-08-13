@@ -49,9 +49,8 @@
 #include <net/l3mdev.h>
 
 #include "ippp.h"
-int ippp_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
-			 u8 tos, struct net_device *dev)
+int ippp_route_input_noref(struct sk_buff *skb, struct net_device *dev)
 {
-    ippp_route_input_noref(skb,daddr,saddr,	tos,dev);
-
+    const struct ippphdr *ippph = ippp_hdr(skb);
+    return ip_route_input_noref(skb, ippph->addr[ippph->dst_len], ippph->addr[ippph->dst_len + ippph->src_len], ippph->tos, dev);
 }

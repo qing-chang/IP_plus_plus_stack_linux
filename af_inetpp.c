@@ -46,35 +46,179 @@
 #include <linux/mroute6.h>
 #include "ippp.h"
 
-/*由于linux内核源码中没有为新协议族预留协议号，所以原则上需修改内核源码并重新编译，
-这样很不方便。因此这里选择借用linux内核中并未真正实现的AF_IPX的协议族号*/
-#define AF_INETPP 4
-#define PF_INETPP AF_INETPP
-#define ETH_P_IPPP 0x0810 /* Internet Protocol Plus Plus packet */
-
-
 static struct list_head inetswpp[SOCK_MAX];
 static DEFINE_SPINLOCK(inetswpp_lock);
+
+static int inetpp_create(struct net *net, struct socket *sock, int protocol, int kern)
+{
+	struct sock *sk;
+	struct inet_protosw *answer;
+	struct inet_sock *inet;
+	struct proto *answer_prot;
+	unsigned char answer_flags;
+	int try_loading_module = 0;
+	int err;
+
+	if (protocol < 0 || protocol >= IPPROTO_MAX)
+		return -EINVAL;
+
+	sock->state = SS_UNCONNECTED;
+
+	/* Look for the requested type/protocol pair. */
+lookup_protocol:
+	err = -ESOCKTNOSUPPORT;
+	rcu_read_lock();
+	list_for_each_entry_rcu(answer, &inetswpp[sock->type], list) {
+
+		err = 0;
+		/* Check the non-wild match. */
+		if (protocol == answer->protocol) {
+			if (protocol != IPPROTO_IP)
+				break;
+		} else {
+			/* Check for the two wild cases. */
+			if (IPPROTO_IP == protocol) {
+				protocol = answer->protocol;
+				break;
+			}
+			if (IPPROTO_IP == answer->protocol)
+				break;
+		}
+		err = -EPROTONOSUPPORT;
+	}
+
+	if (unlikely(err)) {
+		if (try_loading_module < 2) {
+			rcu_read_unlock();
+			/*
+			 * Be more specific, e.g. net-pf-2-proto-132-type-1
+			 * (net-pf-PF_INET-proto-IPPROTO_SCTP-type-SOCK_STREAM)
+			 */
+			if (++try_loading_module == 1)
+				request_module("net-pf-%d-proto-%d-type-%d", PF_INETPP, protocol, sock->type);
+			/*
+			 * Fall back to generic, e.g. net-pf-2-proto-132
+			 * (net-pf-PF_INET-proto-IPPROTO_SCTP)
+			 */
+			else
+				request_module("net-pf-%d-proto-%d", PF_INETPP, protocol);
+			goto lookup_protocol;
+		} else
+			goto out_rcu_unlock;
+	}
+
+
+
+	err = -EPERM;
+	if (sock->type == SOCK_RAW && !kern && !ns_capable(net->user_ns, CAP_NET_RAW))
+		goto out_rcu_unlock;
+
+	sock->ops = answer->ops;
+	answer_prot = answer->prot;
+	answer_flags = answer->flags;
+	rcu_read_unlock();
+
+	WARN_ON(!answer_prot->slab);
+
+	err = -ENOBUFS;
+	sk = sk_alloc(net, PF_INETPP, GFP_KERNEL, answer_prot, kern);
+	if (!sk)
+		goto out;
+
+	// err = 0;
+	if (INET_PROTOSW_REUSE & answer_flags)
+		sk->sk_reuse = SK_CAN_REUSE;
+
+	inet = inet_sk(sk);
+	inet->is_icsk = (INET_PROTOSW_ICSK & answer_flags) != 0;
+
+	inet->nodefrag = 0;
+
+	if (SOCK_RAW == sock->type) {
+		inet->inet_num = protocol;
+		if (IPPROTO_RAW == protocol)
+			inet->hdrincl = 1;
+	}
+
+	// // if (net->ipv4.sysctl_ip_no_pmtu_disc)
+	// // 	inet->pmtudisc = IP_PMTUDISC_DONT;
+	// // else
+	// // 	inet->pmtudisc = IP_PMTUDISC_WANT;
+
+	inet->inet_id = 0;
+
+	sock_init_data(sock, sk);
+
+	sk->sk_destruct	   = inet_sock_destruct;
+	sk->sk_protocol	   = protocol;
+	sk->sk_backlog_rcv = sk->sk_prot->backlog_rcv;
+
+	inet->uc_ttl	= -1;
+	inet->mc_loop	= 1;
+	inet->mc_ttl	= 1;
+	inet->mc_all	= 1;
+	inet->mc_index	= 0;
+	inet->mc_list	= NULL;
+	inet->rcv_tos	= 0;
+
+	sk_refcnt_debug_inc(sk);
+
+	if (inet->inet_num) {
+		/* It assumes that any protocol which allows
+		 * the user to assign a number at socket
+		 * creation time automatically
+		 * shares.
+		 */
+		inet->inet_sport = htons(inet->inet_num);
+		/* Add to protocol hash chains. */
+		err = sk->sk_prot->hash(sk);
+		if (err) {
+			sk_common_release(sk);
+			goto out;
+		}
+	}
+
+	if (sk->sk_prot->init) {
+		err = sk->sk_prot->init(sk);
+		if (err) {
+			sk_common_release(sk);
+			goto out;
+		}
+	}
+
+	if (!kern) {
+		// err = BPF_CGROUP_RUN_PROG_INET_SOCK(sk);
+		// if (err) {
+		// 	sk_common_release(sk);
+		// 	goto out;
+		// }
+	}
+
+out:
+	return err;
+out_rcu_unlock:
+	rcu_read_unlock();
+	goto out;
+}
 
 int __inetpp_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 		bool force_bind_address_no_port, bool with_lock)
 {
 	struct sockaddr_ippp *addr = (struct sockaddr_ippp *)uaddr;
 	struct inet_sock *inet = inet_sk(sk);
-	struct udppp_sock *udpppsk = udpppsk(sk);
+	struct udppp_sock *udpppsk = udppp_sk(sk);
 	struct net *net = sock_net(sk);
 	unsigned short snum;
 	int chk_addr_ret;
 	u32 tb_id = RT_TABLE_LOCAL;
 	int err;
 
-	if (addr->sin_family != AF_INET) {
+	if (addr->sin_family != AF_INETPP) {
 		/* Compatibility games : accept AF_UNSPEC (mapped to AF_INET)
 		 * only if s_addr is INADDR_ANY.
 		 */
 		err = -EAFNOSUPPORT;
-		if (addr->sin_family != AF_UNSPEC ||
-		    leafAddr(addr) != htonl(INADDR_ANY))
+		if (addr->sin_family != AF_UNSPEC || leafAddr(addr) != htonl(INADDR_ANY))
 			goto out;
 	}
 
@@ -118,13 +262,25 @@ int __inetpp_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 		goto out_release_sock;
 
 	inet->inet_rcv_saddr = inet->inet_saddr = leafAddr(addr);
+	
+	/*检验地址合法性*/
+	if(addr->sin_addr.type==1){		//相对地址
+	// 	if(addr->sin_addr.base!=addr->sin_addr.len){
+	// 		err = EINVAL;
+	// 		goto out;
+	// 	}
+		if(addr->sin_addr.base!=0){
+
+		}
+	} else {						//绝对地址
+
+	}
 	udpppsk->inetpp.saddr = addr->sin_addr;
 	// if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 	// 	inet->inet_saddr = 0;  /* Use device */
 
 	/* Make sure we are allowed to bind here. */
-	if (snum || !(inet->bind_address_no_port ||
-		      force_bind_address_no_port)) {
+	if (snum || !(inet->bind_address_no_port || force_bind_address_no_port)) {
 		if (sk->sk_prot->get_port(sk, snum)) {
 			inet->inet_saddr = inet->inet_rcv_saddr = 0;
 			err = -EADDRINUSE;
@@ -176,12 +332,54 @@ int inetpp_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 }
 EXPORT_SYMBOL(inetpp_bind);
 
- 
+int inetpp_release(struct socket *sock)
+{
+	struct sock *sk = sock->sk;
+	if (!sk)
+		return -EINVAL;
+
+	/* Free mc lists */
+	//ipv6_sock_mc_close(sk);
+
+	/* Free ac lists */
+	//ipv6_sock_ac_close(sk);
+
+	return inet_release(sock);
+}
+EXPORT_SYMBOL(inetpp_release);
+
+int inetpp_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
+{
+	struct sock *sk = sock->sk;
+
+	if (unlikely(inet_send_prepare(sk)))
+		return -EAGAIN;
+
+	return INDIRECT_CALL_2(sk->sk_prot->sendmsg, tcp_sendmsg, udp_sendmsg, sk, msg, size);
+}
+EXPORT_SYMBOL(inetpp_sendmsg);
+
+INDIRECT_CALLABLE_DECLARE(int udp_recvmsg(struct sock *, struct msghdr *, size_t, int, int, int *));
+int inetpp_recvmsg(struct socket *sock, struct msghdr *msg, size_t size, int flags)
+{
+	struct sock *sk = sock->sk;
+	int addr_len = 0;
+	int err;
+
+	if (likely(!(flags & MSG_ERRQUEUE)))
+		sock_rps_record_flow(sk);
+
+	err = INDIRECT_CALL_2(sk->sk_prot->recvmsg, udppp_recvmsg, udppp_recvmsg, sk, msg, size, flags & MSG_DONTWAIT, flags & ~MSG_DONTWAIT, &addr_len);
+	if (err >= 0)
+		msg->msg_namelen = addr_len;
+	return err;
+}
+
 const struct proto_ops inetpp_stream_ops = {
 	.family		   = PF_INETPP,
 	.owner		   = THIS_MODULE,
-//	.release	   = inet6_release,
-//	.bind		   = inet6_bind,
+	.release	   = inetpp_release,
+	.bind		   = inetpp_bind,
 //	.connect	   = inet_stream_connect,	
 //	.socketpair	   = sock_no_socketpair,	
 //	.accept		   = inet_accept,		
@@ -190,11 +388,11 @@ const struct proto_ops inetpp_stream_ops = {
 //	.ioctl		   = inet6_ioctl,		
 //	.gettstamp	   = sock_gettstamp,
 //	.listen		   = inet_listen,		
-//	.shutdown	   = inet_shutdown,		
+	.shutdown	   = inet_shutdown,		
 //	.setsockopt	   = sock_common_setsockopt,	
 //	.getsockopt	   = sock_common_getsockopt,	
-//	.sendmsg	   = inet6_sendmsg,		
-//	.recvmsg	   = inet6_recvmsg,		
+	.sendmsg	   = inetpp_sendmsg,		
+	.recvmsg	   = inetpp_recvmsg,
 #ifdef CONFIG_MMU
 //	.mmap		   = tcp_mmap,
 #endif
@@ -212,30 +410,30 @@ const struct proto_ops inetpp_stream_ops = {
 }; 
 
 const struct proto_ops inetpp_dgram_ops = {
-	.family = PF_INET6,
+	.family = PF_INETPP,
 	.owner = THIS_MODULE,
-//	.release = inet6_release,
+	.release = inetpp_release,
 	.bind = inetpp_bind,
-/*	.connect = inet_dgram_connect,
-	.socketpair = sock_no_socketpair,
-	.accept = sock_no_accept,
-	.getname = inet6_getname,
-	.poll = udp_poll,
-	.ioctl = inet6_ioctl,
-	.gettstamp = sock_gettstamp,
-	.listen = sock_no_listen,
-	.shutdown = inet_shutdown,
-	.setsockopt = sock_common_setsockopt,
-	.getsockopt = sock_common_getsockopt,
-	.sendmsg = inet6_sendmsg,
-	.recvmsg = inet6_recvmsg,
-	.mmap = sock_no_mmap,
-	.sendpage = sock_no_sendpage,
-	.set_peek_off = sk_set_peek_off,
-#ifdef CONFIG_COMPAT
-	.compat_setsockopt = compat_sock_common_setsockopt,
-	.compat_getsockopt = compat_sock_common_getsockopt,
-#endif*/
+// 	.connect = inet_dgram_connect,
+// 	.socketpair = sock_no_socketpair,
+// 	.accept = sock_no_accept,
+// 	.getname = inet6_getname,
+// 	.poll = udp_poll,
+// 	.ioctl = inet6_ioctl,
+// 	.gettstamp = sock_gettstamp,
+// 	.listen = sock_no_listen,
+ 	.shutdown = inet_shutdown,
+// 	.setsockopt = sock_common_setsockopt,
+// 	.getsockopt = sock_common_getsockopt,
+	.sendmsg = inetpp_sendmsg,
+	.recvmsg = inetpp_recvmsg,
+// 	.mmap = sock_no_mmap,
+// 	.sendpage = sock_no_sendpage,
+// 	.set_peek_off = sk_set_peek_off,
+// #ifdef CONFIG_COMPAT
+// 	.compat_setsockopt = compat_sock_common_setsockopt,
+// 	.compat_getsockopt = compat_sock_common_getsockopt,
+// #endif
 };
 
 int inetpp_register_protosw(struct inet_protosw *p)
@@ -308,160 +506,6 @@ void inetpp_unregister_protosw(struct inet_protosw *p)
 	}
 }
 EXPORT_SYMBOL(inetpp_unregister_protosw);
-
-static int inetpp_create(struct net *net, struct socket *sock, int protocol, int kern)
-{
-	struct sock *sk;
-	struct inet_protosw *answer;
-	struct inet_sock *inet;
-	struct proto *answer_prot;
-	unsigned char answer_flags;
-	int try_loading_module = 0;
-	int err;
-
-	if (protocol < 0 || protocol >= IPPROTO_MAX)
-		return -EINVAL;
-
-	sock->state = SS_UNCONNECTED;
-
-	/* Look for the requested type/protocol pair. */
-lookup_protocol:
-	err = -ESOCKTNOSUPPORT;
-	rcu_read_lock();
-	list_for_each_entry_rcu(answer, &inetswpp[sock->type], list) {
-
-		err = 0;
-		/* Check the non-wild match. */
-		if (protocol == answer->protocol) {
-			if (protocol != IPPROTO_IP)
-				break;
-		} else {
-			/* Check for the two wild cases. */
-			if (IPPROTO_IP == protocol) {
-				protocol = answer->protocol;
-				break;
-			}
-			if (IPPROTO_IP == answer->protocol)
-				break;
-		}
-		err = -EPROTONOSUPPORT;
-	}
-
-	if (unlikely(err)) {
-		if (try_loading_module < 2) {
-			rcu_read_unlock();
-			/*
-			 * Be more specific, e.g. net-pf-2-proto-132-type-1
-			 * (net-pf-PF_INET-proto-IPPROTO_SCTP-type-SOCK_STREAM)
-			 */
-			if (++try_loading_module == 1)
-				request_module("net-pf-%d-proto-%d-type-%d",
-					       PF_INETPP, protocol, sock->type);
-			/*
-			 * Fall back to generic, e.g. net-pf-2-proto-132
-			 * (net-pf-PF_INET-proto-IPPROTO_SCTP)
-			 */
-			else
-				request_module("net-pf-%d-proto-%d",
-					       PF_INETPP, protocol);
-			goto lookup_protocol;
-		} else
-			goto out_rcu_unlock;
-	}
-
-
-
-	err = -EPERM;
-	if (sock->type == SOCK_RAW && !kern && !ns_capable(net->user_ns, CAP_NET_RAW))
-		goto out_rcu_unlock;
-
-	sock->ops = answer->ops;
-	answer_prot = answer->prot;
-	answer_flags = answer->flags;
-	rcu_read_unlock();
-
-	WARN_ON(!answer_prot->slab);
-
-	err = -ENOBUFS;
-	sk = sk_alloc(net, PF_INETPP, GFP_KERNEL, answer_prot, kern);
-	if (!sk)
-		goto out;
-
-	err = 0;
-	if (INET_PROTOSW_REUSE & answer_flags)
-		sk->sk_reuse = SK_CAN_REUSE;
-
-	inet = inet_sk(sk);
-	inet->is_icsk = (INET_PROTOSW_ICSK & answer_flags) != 0;
-
-	inet->nodefrag = 0;
-
-	if (SOCK_RAW == sock->type) {
-		inet->inet_num = protocol;
-		if (IPPROTO_RAW == protocol)
-			inet->hdrincl = 1;
-	}
-
-	// if (net->ipv4.sysctl_ip_no_pmtu_disc)
-	// 	inet->pmtudisc = IP_PMTUDISC_DONT;
-	// else
-	// 	inet->pmtudisc = IP_PMTUDISC_WANT;
-
-	inet->inet_id = 0;
-
-	sock_init_data(sock, sk);
-
-	sk->sk_destruct	   = inet_sock_destruct;
-	sk->sk_protocol	   = protocol;
-	sk->sk_backlog_rcv = sk->sk_prot->backlog_rcv;
-
-	inet->uc_ttl	= -1;
-	inet->mc_loop	= 1;
-	inet->mc_ttl	= 1;
-	inet->mc_all	= 1;
-	inet->mc_index	= 0;
-	inet->mc_list	= NULL;
-	inet->rcv_tos	= 0;
-
-	sk_refcnt_debug_inc(sk);
-
-	if (inet->inet_num) {
-		/* It assumes that any protocol which allows
-		 * the user to assign a number at socket
-		 * creation time automatically
-		 * shares.
-		 */
-		inet->inet_sport = htons(inet->inet_num);
-		/* Add to protocol hash chains. */
-		err = sk->sk_prot->hash(sk);
-		if (err) {
-			sk_common_release(sk);
-			goto out;
-		}
-	}
-
-	if (sk->sk_prot->init) {
-		err = sk->sk_prot->init(sk);
-		if (err) {
-			sk_common_release(sk);
-			goto out;
-		}
-	}
-
-	if (!kern) {
-		err = BPF_CGROUP_RUN_PROG_INET_SOCK(sk);
-		if (err) {
-			sk_common_release(sk);
-			goto out;
-		}
-	}
-
-out:
-	return err;
-out_rcu_unlock:
-	rcu_read_unlock();
-	goto out;
-}
 
 static const struct net_proto_family inetpp_family_ops = {
 	.family = PF_INETPP,

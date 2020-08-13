@@ -9,8 +9,7 @@ EXPORT_SYMBOL(inetpp_protos);
 
 int inetpp_add_protocol(const struct net_protocol *prot, unsigned char protocol)
 {
-	return !cmpxchg((const struct net_protocol **)&inetpp_protos[protocol],
-			NULL, prot) ? 0 : -1;
+	return !cmpxchg((const struct net_protocol **)&inetpp_protos[protocol], NULL, prot) ? 0 : -1;
 }
 EXPORT_SYMBOL(inetpp_add_protocol);
 
@@ -18,8 +17,7 @@ int inetpp_del_protocol(const struct net_protocol *prot, unsigned char protocol)
 {
 	int ret;
 
-	ret = (cmpxchg((const struct net_protocol **)&inetpp_protos[protocol],
-		       prot, NULL) == prot) ? 0 : -1;
+	ret = (cmpxchg((const struct net_protocol **)&inetpp_protos[protocol], prot, NULL) == prot) ? 0 : -1;
 
 	synchronize_net();
 

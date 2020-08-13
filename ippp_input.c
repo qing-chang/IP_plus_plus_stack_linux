@@ -31,6 +31,7 @@
 #include <linux/mroute.h>
 #include <linux/netlink.h>
 #include <net/dst_metadata.h>
+//#include <linux/math.h>
 #include "ippp.h"
 
 void ippp_protocol_deliver_rcu(struct net *net, struct sk_buff *skb, int protocol)
@@ -41,17 +42,16 @@ void ippp_protocol_deliver_rcu(struct net *net, struct sk_buff *skb, int protoco
 resubmit:
 	//raw = raw_local_deliver(skb, protocol);
 
-	ipprot = rcu_dereference(inet_protos[protocol]);
+	ipprot = rcu_dereference(inetpp_protos[protocol]);
 	if (ipprot) {
 		if (!ipprot->no_policy) {
-			if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
-				kfree_skb(skb);
-				return;
-			}
-			//nf_reset_ct(skb);
+	// 		if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
+	// 			kfree_skb(skb);
+	// 			return;
+	// 		}
+	// 		//nf_reset_ct(skb);
 		}
-		//ret = INDIRECT_CALL_2(ipprot->handler, tcp_v4_rcv, udp_rcv,
-		//		      skb);
+		ret = INDIRECT_CALL_2(ipprot->handler, udppp_rcv, udppp_rcv, skb);
 		if (ret < 0) {
 			protocol = -ret;
 			goto resubmit;
@@ -59,15 +59,15 @@ resubmit:
 		__IP_INC_STATS(net, IPSTATS_MIB_INDELIVERS);
 	} else {
 		if (!raw) {
-			if (xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
-				__IP_INC_STATS(net, IPSTATS_MIB_INUNKNOWNPROTOS);
-				icmp_send(skb, ICMP_DEST_UNREACH,
-					  ICMP_PROT_UNREACH, 0);
-			}
-			kfree_skb(skb);
+	// 		if (xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
+	// 			__IP_INC_STATS(net, IPSTATS_MIB_INUNKNOWNPROTOS);
+	// 			icmp_send(skb, ICMP_DEST_UNREACH,
+	// 				  ICMP_PROT_UNREACH, 0);
+	// 		}
+	// 		kfree_skb(skb);
 		} else {
-			__IP_INC_STATS(net, IPSTATS_MIB_INDELIVERS);
-			consume_skb(skb);
+	// 		__IP_INC_STATS(net, IPSTATS_MIB_INDELIVERS);
+	// 		consume_skb(skb);
 		}
 	}
 }
@@ -76,7 +76,7 @@ static int ippp_local_deliver_finish(struct net *net, struct sock *sk, struct sk
 	__skb_pull(skb, skb_network_header_len(skb));
 
 	rcu_read_lock();
-	ippp_protocol_deliver_rcu(net, skb, ip_hdr(skb)->protocol);
+	ippp_protocol_deliver_rcu(net, skb, ippp_hdr(skb)->protocol);
 	rcu_read_unlock();
 
 	return 0;
@@ -92,21 +92,20 @@ int ippp_local_deliver(struct sk_buff *skb)
 	 */
 	struct net *net = dev_net(skb->dev);
 
-	if (ip_is_fragment(ip_hdr(skb))) {
-		if (ip_defrag(net, skb, IP_DEFRAG_LOCAL_DELIVER))
-			return 0;
-	}
+	// if (ip_is_fragment(ip_hdr(skb))) {
+	// 	if (ip_defrag(net, skb, IP_DEFRAG_LOCAL_DELIVER))
+	// 		return 0;
+	// }
 
-	return NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_IN,
-		       net, NULL, skb, skb->dev, NULL,
-		       ippp_local_deliver_finish);
+	return NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_IN, net, NULL, skb, skb->dev, NULL, ippp_local_deliver_finish);
 }
 
 static int ip_rcv_finish_core(struct net *net, struct sock *sk,
 			      struct sk_buff *skb, struct net_device *dev,
 			      const struct sk_buff *hint)
 {
-	const struct iphdr *iph = ip_hdr(skb);
+	const struct ippphdr *ippph = ippp_hdr(skb);
+	//const struct iphdr *iph = ip_hdr(skb);
 	int (*edemux)(struct sk_buff *skb);
 	struct rtable *rt;
 	int err;
@@ -127,8 +126,7 @@ static int ip_rcv_finish_core(struct net *net, struct sock *sk,
 
 // 		ipprot = rcu_dereference(inetpp_protos[protocol]);
 // 		if (ipprot && (edemux = READ_ONCE(ipprot->early_demux))) {
-// 			err = INDIRECT_CALL_2(edemux, tcp_v4_early_demux,
-// 					      udp_v4_early_demux, skb);
+// 			err = INDIRECT_CALL_2(edemux, tcp_v4_early_demux, udp_v4_early_demux, skb);
 // 			if (unlikely(err))
 // 				goto drop_error;
 // 			/* must reload iph, skb->head might have changed */
@@ -136,16 +134,15 @@ static int ip_rcv_finish_core(struct net *net, struct sock *sk,
 // 		}
 // 	}
 
-// 	/*
-// 	 *	Initialise the virtual path cache for the packet. It describes
-// 	 *	how the packet travels inside Linux networking.
-// 	 */
-// 	if (!skb_valid_dst(skb)) {
-// 		err = ip_route_input_noref(skb, iph->daddr, iph->saddr,
-// 					   iph->tos, dev);
-// 		if (unlikely(err))
-// 			goto drop_error;
-// 	}
+	/*
+	 *	Initialise the virtual path cache for the packet. It describes
+	 *	how the packet travels inside Linux networking.
+	 */
+	if (!skb_valid_dst(skb)) {
+		err = ippp_route_input_noref(skb, dev);
+		if (unlikely(err))
+			goto drop_error;
+	}
 
 // #ifdef CONFIG_IP_ROUTE_CLASSID
 // 	if (unlikely(skb_dst(skb)->tclassid)) {
@@ -158,7 +155,7 @@ static int ip_rcv_finish_core(struct net *net, struct sock *sk,
 // 	}
 // #endif
 
-// 	if (iph->ihl > 5 && ip_rcv_options(skb, dev))
+// 	if (ip_rcv_options(skb, dev))
 // 		goto drop;
 
 // 	rt = skb_rtable(skb);
@@ -184,11 +181,10 @@ static int ip_rcv_finish_core(struct net *net, struct sock *sk,
 		 * in a way a form of multicast and the most common use case for
 		 * this is 802.11 protecting against cross-station spoofing (the
 		 * so-called "hole-196" attack) so do it for both.
-		 * /
-		if (in_dev &&
-		    IN_DEV_ORCONF(in_dev, DROP_UNICAST_IN_L2_MULTICAST))
-			goto drop;
-	}*/
+		 */
+	// 	if (in_dev && IN_DEV_ORCONF(in_dev, DROP_UNICAST_IN_L2_MULTICAST))
+	// 		goto drop;
+	// }
 
 	return NET_RX_SUCCESS;
 
@@ -216,7 +212,7 @@ static int ippp_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb
 
 	ret = ip_rcv_finish_core(net, sk, skb, dev, NULL);
 	if (ret != NET_RX_DROP)
-		ret = dst_input(skb);
+		ret = ippp_local_deliver(skb);//dst_input(skb);
 	return ret;
 }
 
@@ -226,7 +222,7 @@ static int ippp_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb
 static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
 {
 	const struct ippphdr *ippph;
-	u32 len;
+	u32 len,hdrLen;
 
 	/* When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
@@ -234,7 +230,7 @@ static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
 	if (skb->pkt_type == PACKET_OTHERHOST)
 		goto drop;
 
-	//__IP_UPD_PO_STATS(net, IPSTATS_MIB_IN, skb->len);
+	__IP_UPD_PO_STATS(net, IPSTATS_MIB_IN, skb->len);
 
 	skb = skb_share_check(skb, GFP_ATOMIC);
 	if (!skb) {
@@ -242,10 +238,11 @@ static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
 		goto out;
 	}
 
-	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
+	if (!pskb_may_pull(skb, 20))
 		goto inhdr_error;
 
 	ippph = ippp_hdr(skb);
+	hdrLen = hdr_len(ippph);
 
 	/*
 	 *	RFC1122: 3.2.1.2 MUST silently discard any IP frame that fails the checksum.
@@ -261,49 +258,48 @@ static struct sk_buff *ippp_rcv_core(struct sk_buff *skb, struct net *net)
 	if (ippph->version != 0)
 		goto inhdr_error;
 
-/*	BUILD_BUG_ON(IPSTATS_MIB_ECT1PKTS != IPSTATS_MIB_NOECTPKTS + INET_ECN_ECT_1);
-	BUILD_BUG_ON(IPSTATS_MIB_ECT0PKTS != IPSTATS_MIB_NOECTPKTS + INET_ECN_ECT_0);
-	BUILD_BUG_ON(IPSTATS_MIB_CEPKTS != IPSTATS_MIB_NOECTPKTS + INET_ECN_CE);
-	__IP_ADD_STATS(net,
-		       IPSTATS_MIB_NOECTPKTS + (iph->tos & INET_ECN_MASK),
-		       max_t(unsigned short, 1, skb_shinfo(skb)->gso_segs));
+//	BUILD_BUG_ON(IPSTATS_MIB_ECT1PKTS != IPSTATS_MIB_NOECTPKTS + INET_ECN_ECT_1);
+// 	BUILD_BUG_ON(IPSTATS_MIB_ECT0PKTS != IPSTATS_MIB_NOECTPKTS + INET_ECN_ECT_0);
+// 	BUILD_BUG_ON(IPSTATS_MIB_CEPKTS != IPSTATS_MIB_NOECTPKTS + INET_ECN_CE);
+// 	__IP_ADD_STATS(net,
+// 		       IPSTATS_MIB_NOECTPKTS + (iph->tos & INET_ECN_MASK),
+// 		       max_t(unsigned short, 1, skb_shinfo(skb)->gso_segs));
 
-	if (!pskb_may_pull(skb, iph->ihl*4))
+	if (!pskb_may_pull(skb, hdrLen))
 		goto inhdr_error;
 
-	iph = ip_hdr(skb);
+	ippph = ippp_hdr(skb);
+	hdrLen = hdr_len(ippph);
 
-	//if (unlikely(ip_fast_csum((u8 *)iph, iph->ihl)))
-	//	goto csum_error;
-
-	len = ntohs(iph->tot_len);
+	len = ntohs(ippph->tot_len);
 	if (skb->len < len) {
 		__IP_INC_STATS(net, IPSTATS_MIB_INTRUNCATEDPKTS);
 		goto drop;
-	} else if (len < (iph->ihl*4))
+	} else if (len < hdrLen)
 		goto inhdr_error;
 
 	/* Our transport medium may have padded the buffer out. Now we know it
 	 * is IP we can trim to the true length of the frame.
 	 * Note this now means skb->len holds ntohs(iph->tot_len).
-	 * /
+	 */
 	if (pskb_trim_rcsum(skb, len)) {
 		__IP_INC_STATS(net, IPSTATS_MIB_INDISCARDS);
 		goto drop;
 	}
 
-	iph = ip_hdr(skb);
-	skb->transport_header = skb->network_header + iph->ihl*4;
+	ippph = ippp_hdr(skb);
+	hdrLen = hdr_len(ippph);
+	skb->transport_header = skb->network_header + hdrLen;
 
-	/* Remove any debris in the socket control block * /
+	/* Remove any debris in the socket control block */
 	memset(IPCB(skb), 0, sizeof(struct inet_skb_parm));
 	IPCB(skb)->iif = skb->skb_iif;
 
-	/* Must drop socket now because of tproxy. * /
+	/* Must drop socket now because of tproxy. */
 	skb_orphan(skb);
 
 	return skb;
-*/
+
 inhdr_error:
 	__IP_INC_STATS(net, IPSTATS_MIB_INHDRERRORS);
 drop:
@@ -323,7 +319,5 @@ int ippp_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 	if (skb == NULL)
 		return NET_RX_DROP;
 
-	return 0;NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
-		       net, NULL, skb, dev, NULL,
-		       ippp_rcv_finish);
+	return NF_HOOK(NFPROTO_IPPP, NF_INET_PRE_ROUTING,net, NULL, skb, dev, NULL,ippp_rcv_finish);
 }
