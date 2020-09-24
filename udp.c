@@ -119,11 +119,10 @@ int udppp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	if (usin) {
 		if (msg->msg_namelen < sizeof(*usin))
 			return -EINVAL;
-		if (usin->sin_family != AF_INET) {
+		if (usin->sin_family != AF_INETPP) {
 			if (usin->sin_family != AF_UNSPEC)
 				return -EAFNOSUPPORT;
 		}
-
 		daddr = usin->sin_addr.s_addr;
 		dport = usin->sin_port;
 		if (dport == 0)
@@ -752,9 +751,9 @@ static struct sock *udp4_lib_lookup2(struct net *net, __be32 saddr, __be16 sport
 	badness = 0;
 	udp_portaddr_for_each_entry_rcu(sk, &hslot2->head) {
 		score = compute_score(sk, net, saddr, sport, daddr, hnum, dif, sdif);
-	char str[20];
-	u32tostr(score,str);
-	printk("score=%s",str);
+	// char str[20];
+	// u32tostr(score,str);
+	// printk("score=%s",str);
 		if (score > badness) {
 			if (sk->sk_reuseport &&
 			    sk->sk_state != TCP_ESTABLISHED) {
@@ -781,13 +780,10 @@ struct sock *__udp4_lib_lookup_(struct net *net, __be32 saddr, __be16 sport, __b
 	hash2 = ipv4_portaddr_hash(net, daddr, hnum);
 	slot2 = hash2 & udptable->mask;
 	hslot2 = &udptable->hash2[slot2];
-	char str[20];
-	u32tostr(hash2,str);
-	printk(str);
+
 	result = udp4_lib_lookup2(net, saddr, sport, daddr, hnum, dif, sdif, hslot2, skb);
 	if (!result) {
 		hash2 = ipv4_portaddr_hash(net, htonl(INADDR_ANY), hnum);
-	u32tostr(hash2,str);	printk(str);
 		slot2 = hash2 & udptable->mask;
 		hslot2 = &udptable->hash2[slot2];
 
@@ -931,7 +927,7 @@ int __udp_enqueue_schedule_skb(struct sock *sk, struct sk_buff *skb)
 	 * forward allocated memory on dequeue
 	 */
 	sock_skb_set_dropcount(sk, skb);
-printk("__skb_queue_tail.....");
+
 	__skb_queue_tail(list, skb);
 	spin_unlock(&list->lock);
 
@@ -960,7 +956,7 @@ static int __udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	} else {
 		sk_mark_napi_id_once(sk, skb);
 	}
-printk("__udp_queue_rcv_skb.......");
+
 	rc = __udp_enqueue_schedule_skb(sk, skb);
 	// if (rc < 0) {
 	// 	int is_udplite = IS_UDPLITE(sk);
@@ -1149,12 +1145,9 @@ int __udppp_lib_rcv(struct sk_buff *skb, struct udp_table *udptable, int proto)
 	ulen = ntohs(uh->len);
 	// saddr = ip_hdr(skb)->saddr;
 	// daddr = ip_hdr(skb)->daddr;
-char str[20];
-u32tostr(ulen,str);
-printk(str);
 	if (ulen > skb->len)
 		goto short_packet;
-printk("__udppp_lib_rcv.....");
+
 	if (proto == IPPROTO_UDP) {
 		/* UDP validates ulen. */
 		if (ulen < sizeof(*uh) || pskb_trim_rcsum(skb, ulen))
@@ -1183,7 +1176,7 @@ printk("__udppp_lib_rcv.....");
 	// 	return __udp4_lib_mcast_deliver(net, skb, uh, saddr, daddr, udptable, proto);
 
 	sk = __udppp_lib_lookup_skb(skb, uh->source, uh->dest, udptable);
-	if (sk){printk("success.....");
+	if (sk){
 		return udppp_unicast_rcv_skb(sk, skb, uh);
 	}
 
