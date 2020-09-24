@@ -339,6 +339,251 @@ do_confirm:
 }
 EXPORT_SYMBOL(udppp_sendmsg);
 
+static struct sk_buff *skb_set_peeked(struct sk_buff *skb)
+{
+	struct sk_buff *nskb;
+
+	if (skb->peeked)
+		return skb;
+
+	/* We have to unshare an skb before modifying it. */
+	if (!skb_shared(skb))
+		goto done;
+
+	nskb = skb_clone(skb, GFP_ATOMIC);
+	if (!nskb)
+		return ERR_PTR(-ENOMEM);
+
+	skb->prev->next = nskb;
+	skb->next->prev = nskb;
+	nskb->prev = skb->prev;
+	nskb->next = skb->next;
+
+	consume_skb(skb);
+	skb = nskb;
+
+done:
+	skb->peeked = 1;
+
+	return skb;
+}
+
+struct sk_buff *__skb_try_recv_from_queue(struct sock *sk, struct sk_buff_head *queue,
+					  unsigned int flags, int *off, int *err, struct sk_buff **last)
+{
+	bool peek_at_off = false;
+	struct sk_buff *skb;
+	int _off = 0;
+
+	if (unlikely(flags & MSG_PEEK && *off >= 0)) {
+		peek_at_off = true;
+		_off = *off;
+	}
+
+	*last = queue->prev;
+	skb_queue_walk(queue, skb) {
+		if (flags & MSG_PEEK) {
+			if (peek_at_off && _off >= skb->len &&
+			    (_off || skb->peeked)) {
+				_off -= skb->len;
+				continue;
+			}
+			if (!skb->len) {
+				skb = skb_set_peeked(skb);
+				if (IS_ERR(skb)) {
+					*err = PTR_ERR(skb);
+					return NULL;
+				}
+			}
+			refcount_inc(&skb->users);
+		} else {
+			__skb_unlink(skb, queue);
+		}
+		*off = _off;
+		return skb;
+	}
+	return NULL;
+}
+
+static void udp_rmem_release(struct sock *sk, int size, int partial, bool rx_queue_lock_held)
+{
+	struct udp_sock *up = udp_sk(sk);
+	struct sk_buff_head *sk_queue;
+	int amt;
+
+	if (likely(partial)) {
+		up->forward_deficit += size;
+		size = up->forward_deficit;
+		if (size < (sk->sk_rcvbuf >> 2) &&
+		    !skb_queue_empty(&up->reader_queue))
+			return;
+	} else {
+		size += up->forward_deficit;
+	}
+	up->forward_deficit = 0;
+
+	/* acquire the sk_receive_queue for fwd allocated memory scheduling,
+	 * if the called don't held it already
+	 */
+	sk_queue = &sk->sk_receive_queue;
+	if (!rx_queue_lock_held)
+		spin_lock(&sk_queue->lock);
+
+
+	sk->sk_forward_alloc += size;
+	amt = (sk->sk_forward_alloc - partial) & ~(SK_MEM_QUANTUM - 1);
+	sk->sk_forward_alloc -= amt;
+
+	if (amt)
+		__sk_mem_reduce_allocated(sk, amt >> SK_MEM_QUANTUM_SHIFT);
+
+	atomic_sub(size, &sk->sk_rmem_alloc);
+
+	/* this can save us from acquiring the rx queue lock on next receive */
+	skb_queue_splice_tail_init(sk_queue, &up->reader_queue);
+
+	if (!rx_queue_lock_held)
+		spin_unlock(&sk_queue->lock);
+}
+
+#define UDP_SKB_IS_STATELESS 0x80000000
+
+static int udp_skb_truesize(struct sk_buff *skb)
+{
+	return udp_skb_scratch(skb)->_tsize_state & ~UDP_SKB_IS_STATELESS;
+}
+
+static void udp_skb_dtor_locked(struct sock *sk, struct sk_buff *skb)
+{
+	prefetch(&skb->data);
+	udp_rmem_release(sk, udp_skb_truesize(skb), 1, true);
+}
+
+static inline int connection_based(struct sock *sk)
+{
+	return sk->sk_type == SOCK_SEQPACKET || sk->sk_type == SOCK_STREAM;
+}
+
+static int receiver_wake_function_pp(wait_queue_entry_t *wait, unsigned int mode, int sync, void *key)
+{
+	/*
+	 * Avoid a wakeup if event not interesting for us
+	 */
+	if (key && !(key_to_poll(key) & (EPOLLIN | EPOLLERR)))
+		return 0;
+	return autoremove_wake_function(wait, mode, sync, key);
+}
+
+int __skb_wait_for_more_packets_pp(struct sock *sk, struct sk_buff_head *queue, int *err, long *timeo_p, const struct sk_buff *skb)
+{
+	int error;
+	DEFINE_WAIT_FUNC(wait, receiver_wake_function_pp);
+
+	prepare_to_wait_exclusive(sk_sleep(sk), &wait, TASK_INTERRUPTIBLE);
+
+	/* Socket errors? */
+	error = sock_error(sk);
+	if (error)
+		goto out_err;
+
+	if (READ_ONCE(queue->prev) != skb)
+		goto out;
+
+	/* Socket shut down? */
+	if (sk->sk_shutdown & RCV_SHUTDOWN)
+		goto out_noerr;
+
+	/* Sequenced packets can come disconnected.
+	 * If so we report the problem
+	 */
+	error = -ENOTCONN;
+	if (connection_based(sk) && !(sk->sk_state == TCP_ESTABLISHED || sk->sk_state == TCP_LISTEN))
+		goto out_err;
+
+	/* handle signals */
+	if (signal_pending(current))
+		goto interrupted;
+
+	error = 0;
+	*timeo_p = schedule_timeout(*timeo_p);
+out:
+	finish_wait(sk_sleep(sk), &wait);
+	return error;
+interrupted:
+	error = sock_intr_errno(*timeo_p);
+out_err:
+	*err = error;
+	goto out;
+out_noerr:
+	*err = 0;
+	error = 1;
+	goto out;
+}
+
+struct sk_buff *__skb_recv_udppp(struct sock *sk, unsigned int flags, int noblock, int *off, int *err)
+{
+	struct sk_buff_head *sk_queue = &sk->sk_receive_queue;
+	struct sk_buff_head *queue;
+	struct sk_buff *last;
+	long timeo;
+	int error;
+
+	queue = &udp_sk(sk)->reader_queue;
+	flags |= noblock ? MSG_DONTWAIT : 0;
+	timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
+	do {
+		struct sk_buff *skb;
+
+		error = sock_error(sk);
+		if (error)
+			break;
+
+		error = -EAGAIN;
+		do {
+			spin_lock_bh(&queue->lock);
+			skb = __skb_try_recv_from_queue(sk, queue, flags, off,err, &last);
+			if (skb) {
+				if (!(flags & MSG_PEEK))
+					udp_skb_destructor(sk, skb);
+				spin_unlock_bh(&queue->lock);
+				return skb;
+			}
+
+			if (skb_queue_empty_lockless(sk_queue)) {
+				spin_unlock_bh(&queue->lock);
+				goto busy_check;
+			}
+
+			/* refill the reader queue and walk it again
+			 * keep both queues locked to avoid re-acquiring
+			 * the sk_receive_queue lock if fwd memory scheduling
+			 * is needed.
+			 */
+			spin_lock(&sk_queue->lock);
+			skb_queue_splice_tail_init(sk_queue, queue);
+
+			skb = __skb_try_recv_from_queue(sk, queue, flags, off, err, &last);
+			if (skb && !(flags & MSG_PEEK))
+				udp_skb_dtor_locked(sk, skb);
+			spin_unlock(&sk_queue->lock);
+			spin_unlock_bh(&queue->lock);
+			if (skb)
+				return skb;
+
+busy_check:
+			if (!sk_can_busy_loop(sk))
+				break;
+
+			sk_busy_loop(sk, flags & MSG_DONTWAIT);
+		} while (!skb_queue_empty_lockless(sk_queue));
+
+		/* sk_queue is empty, reader_queue may contain peeked packets */
+	} while (timeo && !__skb_wait_for_more_packets_pp(sk, &sk->sk_receive_queue, &error, &timeo, (struct sk_buff *)sk_queue));
+
+	*err = error;
+	return NULL;
+}
+
 /*
  * 	This should be easy, if there is something there we
  * 	return it, otherwise we block.
@@ -347,7 +592,7 @@ EXPORT_SYMBOL(udppp_sendmsg);
 int udppp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock,int flags, int *addr_len)
 {
 	struct inet_sock *inet = inet_sk(sk);
-	DECLARE_SOCKADDR(struct sockaddr_in *, sin, msg->msg_name);
+	DECLARE_SOCKADDR(struct sockaddr_ippp *, sin, msg->msg_name);
 	struct sk_buff *skb;
 	unsigned int ulen, copied;
 	int off, err, peeking = flags & MSG_PEEK;
@@ -384,9 +629,9 @@ try_again:
 
 // 	if (checksum_valid || udp_skb_csum_unnecessary(skb)) {
 // 		if (udp_skb_is_linear(skb))
-// 			err = copy_linear_skb(skb, copied, off, &msg->msg_iter);
+			err = copy_linear_skb(skb, copied, off, &msg->msg_iter);
 // 		else
-// 			err = skb_copy_datagram_msg(skb, off, msg, copied);
+			// err = skb_copy_datagram_msg(skb, off, msg, copied);
 // 	} else {
 // 		err = skb_copy_and_csum_datagram_msg(skb, off, msg);
 
@@ -409,16 +654,16 @@ try_again:
 // 	sock_recv_ts_and_drops(msg, sk, skb);
 
 	/* Copy the address. */
-// 	if (sin) {
-// 		sin->sin_family = AF_INET;
-// 		sin->sin_port = udp_hdr(skb)->source;
+	if (sin) {
+		sin->sin_family = AF_INETPP;
+		sin->sin_port = udp_hdr(skb)->source;
 // 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
 // 		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
-// 		*addr_len = sizeof(*sin);
+		*addr_len = sizeof(*sin);
 
 // 		if (cgroup_bpf_enabled)
 // 			BPF_CGROUP_RUN_PROG_UDP4_RECVMSG_LOCK(sk, (struct sockaddr *)sin);
-// 	}
+	}
 
 // 	if (udp_sk(sk)->gro_enabled)
 // 		udp_cmsg_recv(msg, sk, skb);
@@ -426,12 +671,12 @@ try_again:
 // 	if (inet->cmsg_flags)
 // 		ip_cmsg_recv_offset(msg, sk, skb, sizeof(struct udphdr), off);
 
-// 	err = copied;
-// 	if (flags & MSG_TRUNC)
-// 		err = ulen;
+	err = copied;
+	if (flags & MSG_TRUNC)
+		err = ulen;
 
-// 	skb_consume_udp(sk, skb, peeking ? -err : err);
-// 	return err;
+	skb_consume_udp(sk, skb, peeking ? -err : err);
+	return err;
 
 csum_copy_err:
 // 	if (!__sk_queue_drop_skb(sk, &udp_sk(sk)->reader_queue, skb, flags, udp_skb_destructor)) {
@@ -488,23 +733,16 @@ static int compute_score(struct sock *sk, struct net *net, __be32 saddr, __be16 
 	return score;
 }
 
-static u32 udp_ehashfn(const struct net *net, const __be32 laddr,
-		       const __u16 lport, const __be32 faddr,
-		       const __be16 fport)
+static u32 udp_ehashfn(const struct net *net, const __be32 laddr, const __u16 lport, const __be32 faddr, const __be16 fport)
 {
 	static u32 udp_ehash_secret __read_mostly;
 
 	net_get_random_once(&udp_ehash_secret, sizeof(udp_ehash_secret));
 
-	return __inet_ehashfn(laddr, lport, faddr, fport,
-			      udp_ehash_secret + net_hash_mix(net));
+	return __inet_ehashfn(laddr, lport, faddr, fport, udp_ehash_secret + net_hash_mix(net));
 }
-static struct sock *udp4_lib_lookup2(struct net *net,
-				     __be32 saddr, __be16 sport,
-				     __be32 daddr, unsigned int hnum,
-				     int dif, int sdif,
-				     struct udp_hslot *hslot2,
-				     struct sk_buff *skb)
+static struct sock *udp4_lib_lookup2(struct net *net, __be32 saddr, __be16 sport, __be32 daddr, unsigned int hnum,
+				     int dif, int sdif, struct udp_hslot *hslot2, struct sk_buff *skb)
 {
 	struct sock *sk, *result;
 	int score, badness;
@@ -513,8 +751,7 @@ static struct sock *udp4_lib_lookup2(struct net *net,
 	result = NULL;
 	badness = 0;
 	udp_portaddr_for_each_entry_rcu(sk, &hslot2->head) {
-		score = compute_score(sk, net, saddr, sport,
-				      daddr, hnum, dif, sdif);
+		score = compute_score(sk, net, saddr, sport, daddr, hnum, dif, sdif);
 	char str[20];
 	u32tostr(score,str);
 	printk("score=%s",str);
@@ -523,8 +760,7 @@ static struct sock *udp4_lib_lookup2(struct net *net,
 			    sk->sk_state != TCP_ESTABLISHED) {
 				hash = udp_ehashfn(net, daddr, hnum,
 						   saddr, sport);
-				result = reuseport_select_sock(sk, hash, skb,
-							sizeof(struct udphdr));
+				result = reuseport_select_sock(sk, hash, skb, sizeof(struct udphdr));
 				if (result && !reuseport_has_conns(sk, false))
 					return result;
 			}
@@ -534,8 +770,7 @@ static struct sock *udp4_lib_lookup2(struct net *net,
 	}
 	return result;
 }
-struct sock *__udp4_lib_lookup_(struct net *net, __be32 saddr,
-		__be16 sport, __be32 daddr, __be16 dport, int dif,
+struct sock *__udp4_lib_lookup_(struct net *net, __be32 saddr, __be16 sport, __be32 daddr, __be16 dport, int dif,
 		int sdif, struct udp_table *udptable, struct sk_buff *skb)
 {
 	struct sock *result;
@@ -549,19 +784,14 @@ struct sock *__udp4_lib_lookup_(struct net *net, __be32 saddr,
 	char str[20];
 	u32tostr(hash2,str);
 	printk(str);
-	result = udp4_lib_lookup2(net, saddr, sport,
-				  daddr, hnum, dif, sdif,
-				  hslot2, skb);
+	result = udp4_lib_lookup2(net, saddr, sport, daddr, hnum, dif, sdif, hslot2, skb);
 	if (!result) {
 		hash2 = ipv4_portaddr_hash(net, htonl(INADDR_ANY), hnum);
-	u32tostr(hash2,str);
-	printk(str);
+	u32tostr(hash2,str);	printk(str);
 		slot2 = hash2 & udptable->mask;
 		hslot2 = &udptable->hash2[slot2];
 
-		result = udp4_lib_lookup2(net, saddr, sport,
-					  htonl(INADDR_ANY), hnum, dif, sdif,
-					  hslot2, skb);
+		result = udp4_lib_lookup2(net, saddr, sport, htonl(INADDR_ANY), hnum, dif, sdif, hslot2, skb);
 	}
 	if (IS_ERR(result))
 		return NULL;
@@ -589,8 +819,7 @@ static inline struct sock *__udppp_lib_lookup_skb(struct sk_buff *skb, __be16 sp
 void skb_condense(struct sk_buff *skb)
 {
 	if (skb->data_len) {
-		if (skb->data_len > skb->end - skb->tail ||
-		    skb_cloned(skb))
+		if (skb->data_len > skb->end - skb->tail || skb_cloned(skb))
 			return;
 
 		/* Nice, we can free page frag(s) right now */
@@ -687,13 +916,13 @@ int __udp_enqueue_schedule_skb(struct sock *sk, struct sk_buff *skb)
 	if (size >= sk->sk_forward_alloc) {
 		amt = sk_mem_pages(size);
 		delta = amt << SK_MEM_QUANTUM_SHIFT;
-	// 	if (!__sk_mem_raise_allocated(sk, delta, amt, SK_MEM_RECV)) {
-	// 		err = -ENOBUFS;
-	// 		spin_unlock(&list->lock);
-	// 		goto uncharge_drop;
-	// 	}
+		if (!__sk_mem_raise_allocated(sk, delta, amt, SK_MEM_RECV)) {
+			err = -ENOBUFS;
+			spin_unlock(&list->lock);
+			goto uncharge_drop;
+		}
 
-	// 	sk->sk_forward_alloc += delta;
+		sk->sk_forward_alloc += delta;
 	}
 
 	sk->sk_forward_alloc -= size;
@@ -702,7 +931,7 @@ int __udp_enqueue_schedule_skb(struct sock *sk, struct sk_buff *skb)
 	 * forward allocated memory on dequeue
 	 */
 	sock_skb_set_dropcount(sk, skb);
-
+printk("__skb_queue_tail.....");
 	__skb_queue_tail(list, skb);
 	spin_unlock(&list->lock);
 
@@ -868,8 +1097,8 @@ static int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	if (likely(!udp_unexpected_gso(sk, skb)))
 		return udp_queue_rcv_one_skb(sk, skb);
 
-	// BUILD_BUG_ON(sizeof(struct udp_skb_cb) > SKB_GSO_CB_OFFSET);
-	// __skb_push(skb, -skb_mac_offset(skb));
+	BUILD_BUG_ON(sizeof(struct udp_skb_cb) > SKB_GSO_CB_OFFSET);
+	__skb_push(skb, -skb_mac_offset(skb));
 	// segs = udp_rcv_segment(sk, skb, true);
 	// skb_list_walk_safe(segs, skb, next) {
 	// 	__skb_pull(skb, skb_transport_offset(skb));
@@ -952,7 +1181,7 @@ printk("__udppp_lib_rcv.....");
 
 	// if (rt->rt_flags & (RTCF_BROADCAST|RTCF_MULTICAST))
 	// 	return __udp4_lib_mcast_deliver(net, skb, uh, saddr, daddr, udptable, proto);
-printk("lookup_skb.....");
+
 	sk = __udppp_lib_lookup_skb(skb, uh->source, uh->dest, udptable);
 	if (sk){printk("success.....");
 		return udppp_unicast_rcv_skb(sk, skb, uh);
@@ -1037,15 +1266,15 @@ struct proto udppp_prot = {
 	.unhash			= udp_lib_unhash,
 //	.rehash			= udp_v6_rehash,
 	.get_port		= udppp_get_port,
-//	.memory_allocated	= &udp_memory_allocated,
-//	.sysctl_mem		= sysctl_udp_mem,
-//	.sysctl_wmem_offset     = offsetof(struct net, ipv4.sysctl_udp_wmem_min),
-//	.sysctl_rmem_offset     = offsetof(struct net, ipv4.sysctl_udp_rmem_min),
+	.memory_allocated	= &udp_memory_allocated,
+	.sysctl_mem		= sysctl_udp_mem,
+	.sysctl_wmem_offset     = offsetof(struct net, ipv4.sysctl_udp_wmem_min),
+	.sysctl_rmem_offset     = offsetof(struct net, ipv4.sysctl_udp_rmem_min),
 	.obj_size		= sizeof(struct udppp_sock),
 	.h.udp_table		= &udp_table,
 #ifdef CONFIG_COMPAT
-	//.compat_setsockopt	= compat_udpv6_setsockopt,
-	//.compat_getsockopt	= compat_udpv6_getsockopt,
+	//.compat_setsockopt	= compat_udppp_setsockopt,
+	//.compat_getsockopt	= compat_udppp_getsockopt,
 #endif
 	//.diag_destroy		= udp_abort,
 };

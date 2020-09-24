@@ -105,6 +105,7 @@ struct udppp_sock {
 	struct ippp_pinfo inetpp;
 };
 
+struct sk_buff *__skb_recv_udppp(struct sock *sk, unsigned int flags, int noblock, int *off, int *err);
 int udppp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock,int flags, int *addr_len);
 int udppp_rcv(struct sk_buff *skb);
 int udppp_init(void);

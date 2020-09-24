@@ -134,5 +134,17 @@ struct sockaddr_ippp {
 // 	addr_pp.type=absolute;
 // 	return addr_pp;
 // }
-
+/*十六进制形式打印字符串*/
+void printfHex(const unsigned char *buf, const int num)
+{
+    int i;
+    for(i = 0; i < num; i++)
+    {
+        printf("%02X ", buf[i]);
+        if ((i+1)%16 == 0)
+            printf("\n");
+    }
+    printf("\n");
+    return;
+}
 #endif	/* _IPPP_H */

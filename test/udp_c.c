@@ -23,14 +23,11 @@ int main()
      local_sockaddr.sin_addr.addr[1] = inet_addr("192.168.1.14");
      bind(fd,(struct sockaddr*)&local_sockaddr,sizeof(local_sockaddr));
      char buff[256];
-     int len;
-     len=sizeof(remote_sockaddr);
-     while(1)
-     {
-     //     recvfrom(fd, buff,0,0,&remote_sockaddr,&len);
-     //     printf("received:%s\n",buff);
-          if(getchar()=='c')break;
-     }
+     int remoteAddrLen;
+       do{
+          recvfrom(fd, buff,40,0,(struct sockaddr*)&remote_sockaddr,&remoteAddrLen);
+          printfHex(buff,40);      //printf("received:%02X\n",buff);
+     }while(getchar()=='c');
      close(fd);
      return 0;
 }
