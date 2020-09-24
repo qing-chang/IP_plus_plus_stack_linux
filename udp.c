@@ -1075,7 +1075,7 @@ static int udp_queue_rcv_one_skb(struct sock *sk, struct sk_buff *skb)
 // 	if (sk_filter_trim_cap(sk, skb, sizeof(struct udphdr)))
 // 		goto drop;
 
-// 	udp_csum_pull_header(skb);
+	udp_csum_pull_header(skb);
 
 // 	ipv4_pktinfo_prepare(sk, skb);
 	return __udp_queue_rcv_skb(sk, skb);
