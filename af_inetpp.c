@@ -355,7 +355,7 @@ int inetpp_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 	if (unlikely(inet_send_prepare(sk)))
 		return -EAGAIN;
 
-	return INDIRECT_CALL_2(sk->sk_prot->sendmsg, tcp_sendmsg, udp_sendmsg, sk, msg, size);
+	return INDIRECT_CALL_2(sk->sk_prot->sendmsg, udppp_sendmsg, udppp_sendmsg, sk, msg, size);
 }
 EXPORT_SYMBOL(inetpp_sendmsg);
 
@@ -527,11 +527,19 @@ static int __init inetpp_init(void)
 	for (r = &inetswpp[0]; r < &inetswpp[SOCK_MAX]; ++r)
 		INIT_LIST_HEAD(r);
 
-	err = proto_register(&udppp_prot, 1);
+	err = proto_register(&tcppp_prot, 1);
 	if (err)
 		goto out;
 
+	err = proto_register(&udppp_prot, 1);
+	if (err)
+		goto out_unregister_tcp_proto;
+
 	err = sock_register(&inetpp_family_ops);
+
+	err = tcppp_init();
+	if (err)
+		goto tcppp_fail;
 
 	err = udppp_init();
 	if (err)
@@ -539,9 +547,14 @@ static int __init inetpp_init(void)
 
 	dev_add_pack(&ippp_packet_type);
 	printk(KERN_INFO "ippp inserted\n");
-out:
-	return err;
+	goto out;
+tcppp_fail:
+
 udppp_fail:
+	return err;
+out_unregister_tcp_proto:
+	proto_unregister(&tcppp_prot);
+out:
 	return err;
 }
 
@@ -549,8 +562,10 @@ static void __exit inetpp_exit(void)
 {
 	dev_remove_pack(&ippp_packet_type);
 	udppp_exit();
+	tcppp_exit();
 	sock_unregister(PF_INETPP);
 	proto_unregister(&udppp_prot);
+	proto_unregister(&tcppp_prot);
 	printk(KERN_INFO "ippp exit\n");
 }
 

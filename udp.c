@@ -86,14 +86,10 @@ int udppp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	if (len > 0xFFFF)
 		return -EMSGSIZE;
 
-	/*
-	 *	Check the flags.
-	 */
-
 	if (msg->msg_flags & MSG_OOB) /* Mirror BSD error message compatibility */
 		return -EOPNOTSUPP;
 
-// 	getfrag = is_udplite ? udplite_getfrag : ip_generic_getfrag;
+	getfrag = is_udplite ? udplite_getfrag : ip_generic_getfrag;
 
 	fl4 = &inet->cork.fl.u.ip4;
 	if (up->pending) {
@@ -112,7 +108,7 @@ int udppp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		release_sock(sk);
 	}
 	ulen += sizeof(struct udphdr);
-
+printk(KERN_INFO "udppp_sendmsg...");
 	/*
 	 *	Get and verify the address.
 	 */
@@ -154,18 +150,18 @@ int udppp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 // 			free = 1;
 // 		connected = 0;
 	}
-// 	if (!ipc.opt) {
-// 		struct ip_options_rcu *inet_opt;
+	if (!ipc.opt) {
+		struct ip_options_rcu *inet_opt;
 
-// 		rcu_read_lock();
+		rcu_read_lock();
 // 		inet_opt = rcu_dereference(inet->inet_opt);
 // 		if (inet_opt) {
 // 			memcpy(&opt_copy, inet_opt,
 // 			       sizeof(*inet_opt) + inet_opt->opt.optlen);
 // 			ipc.opt = &opt_copy.opt;
 // 		}
-// 		rcu_read_unlock();
-// 	}
+		rcu_read_unlock();
+	}
 
 // 	if (cgroup_bpf_enabled && !connected) {
 // 		err = BPF_CGROUP_RUN_PROG_UDP4_SENDMSG_LOCK(sk,
@@ -183,8 +179,8 @@ int udppp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 // 		}
 // 	}
 
-// 	saddr = ipc.addr;
-// 	ipc.addr = faddr = daddr;
+	saddr = ipc.addr;
+	ipc.addr = faddr = daddr;
 
 // 	if (ipc.opt && ipc.opt->opt.srr) {
 // 		if (!daddr) {
@@ -269,7 +265,7 @@ back_from_confirm:
 	if (!corkreq) {
 		struct inet_cork cork;
 
-// 		skb = ip_make_skb(sk, fl4, getfrag, msg, ulen, sizeof(struct udphdr), &ipc, &rt, &cork, msg->msg_flags);
+		skb = ip_make_skb(sk, fl4, getfrag, msg, ulen, sizeof(struct udphdr), &ipc, &rt, &cork, msg->msg_flags);
 		err = PTR_ERR(skb);
 // 		if (!IS_ERR_OR_NULL(skb))
 // 			err = udp_send_skb(skb, fl4, &cork);
@@ -314,8 +310,8 @@ out:
 out_free:
 // 	if (free)
 // 		kfree(ipc.opt);
-// 	if (!err)
-// 		return len;
+	if (!err)
+		return len;
 	/*
 	 * ENOBUFS = no kernel mem, SOCK_NOSPACE = no sndbuf space.  Reporting
 	 * ENOBUFS might not be good (it's not tunable per se), but otherwise
@@ -326,7 +322,7 @@ out_free:
 // 	if (err == -ENOBUFS || test_bit(SOCK_NOSPACE, &sk->sk_socket->flags)) {
 // 		UDP_INC_STATS(sock_net(sk), UDP_MIB_SNDBUFERRORS, is_udplite);
 // 	}
-// 	return err;
+	return err;
 
 do_confirm:
 // 	if (msg->msg_flags & MSG_PROBE)
@@ -1250,8 +1246,8 @@ struct proto udppp_prot = {
 //	.ioctl			= udp_ioctl,
 	.init			= udp_init_sock,
 	.destroy		= udp_destroy_sock,
-//	.setsockopt		= udpv6_setsockopt,
-//	.getsockopt		= udpv6_getsockopt,
+//	.setsockopt		= udppp_setsockopt,
+//	.getsockopt		= udppp_getsockopt,
 	.sendmsg		= udppp_sendmsg,
 	.recvmsg		= udppp_recvmsg,
 //	.release_cb		= ip6_datagram_release_cb,
@@ -1291,12 +1287,12 @@ int __init udppp_init(void)
 	ret = inetpp_register_protosw(&udppp_protosw);
 	if (ret)
 		goto out_udppp_protocol;
-out:
-	return ret;
+	goto out;
 
 out_udppp_protocol:
 	inetpp_del_protocol(&udppp_protocol, IPPROTO_UDP);
-	goto out;
+out:
+	return ret;
 }
 
 void udppp_exit(void)

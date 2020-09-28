@@ -22,11 +22,25 @@ int main()
      local_sockaddr.sin_addr.addr[0] = inet_addr("1.1.1.2");
      local_sockaddr.sin_addr.addr[1] = inet_addr("192.168.1.14");
      bind(fd,(struct sockaddr*)&local_sockaddr,sizeof(local_sockaddr));
-     char buff[256];
+     char rcvBuff[256],sndBuff[256];
+     sndBuff[0] = 'H';
+     sndBuff[1] = 'E';
+     sndBuff[2] = 'L';
+     sndBuff[3] = 'L';
+     sndBuff[4] = 'O';
+     sndBuff[5] = '_';
+     sndBuff[6] = 'W';
+     sndBuff[7] = 'O';
+     sndBuff[8] = 'R';
+     sndBuff[9] = 'L';
+     sndBuff[10] = 'D';
+     sndBuff[11] = '.';
      int remoteAddrLen;
        do{
-          recvfrom(fd, buff,40,0,(struct sockaddr*)&remote_sockaddr,&remoteAddrLen);
-          printfHex(buff,40);      //printf("received:%02X\n",buff);
+          recvfrom(fd, rcvBuff, 40, 0, (struct sockaddr*)&remote_sockaddr, &remoteAddrLen);
+          printfHex(rcvBuff, 40);
+          printf("received:%s\n",rcvBuff);
+          sendto(fd, sndBuff, 40, 0, (struct sockaddr*)&remote_sockaddr, remoteAddrLen);
      }while(getchar()=='c');
      close(fd);
      return 0;

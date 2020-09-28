@@ -28,8 +28,8 @@
 #define ETH_P_IPPP 0x0810 /* Internet Protocol Plus Plus packet */
 #define NFPROTO_IPPP 11
 
-extern struct proto udppp_prot;
-extern const struct proto_ops inetpp_dgram_ops;
+extern struct proto tcppp_prot,udppp_prot;
+extern const struct proto_ops inetpp_stream_ops,inetpp_dgram_ops;
 extern struct udp_table udp_table;
 extern struct net_protocol __rcu *inetpp_protos[MAX_INET_PROTOS];
 
@@ -105,6 +105,15 @@ struct udppp_sock {
 	struct ippp_pinfo inetpp;
 };
 
+int tcppp_rcv(struct sk_buff *skb);
+int tcppp_init(void);
+void tcppp_exit(void);
+
+struct sk_buff *ip_make_skb(struct sock *sk, struct flowi4 *fl4,
+			    int getfrag(void *from, char *to, int offset, int len, int odd, struct sk_buff *skb),
+			    void *from, int length, int transhdrlen, struct ipcm_cookie *ipc, struct rtable **rtp,
+			    struct inet_cork *cork, unsigned int flags);
+int udppp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len);
 struct sk_buff *__skb_recv_udppp(struct sock *sk, unsigned int flags, int noblock, int *off, int *err);
 int udppp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock,int flags, int *addr_len);
 int udppp_rcv(struct sk_buff *skb);
