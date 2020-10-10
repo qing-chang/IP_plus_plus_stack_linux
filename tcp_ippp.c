@@ -46,7 +46,127 @@ static struct net_protocol tcppp_protocol = {
 
 int tcppp_rcv(struct sk_buff *skb)
 {
+	struct net *net = dev_net(skb->dev);
+	struct sk_buff *skb_to_free;
+	int sdif = inet_sdif(skb);
+	int dif = inet_iif(skb);
+	const struct ippphdr *ippph;
+	const struct tcphdr *th;
+	bool refcounted;
+	struct sock *sk;
+	int ret;
+
+	if (skb->pkt_type != PACKET_HOST)
+		goto discard_it;
+
+	/* Count it even if it's bad */
+	__TCP_INC_STATS(net, TCP_MIB_INSEGS);
+
+	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
+		goto discard_it;
+
+	th = (const struct tcphdr *)skb->data;
+
+	if (unlikely(th->doff < sizeof(struct tcphdr) / 4))
+		goto bad_packet;
+	if (!pskb_may_pull(skb, th->doff * 4))
+		goto discard_it;
+
+	/* An explanation is required here, I think.
+	 * Packet length and doff are validated by header prediction,
+	 * provided case of th->doff==0 is eliminated.
+	 * So, we defer the checks. */
+
+	if (skb_checksum_init(skb, IPPROTO_TCP, inet_compute_pseudo))
+		goto csum_error;
+
+	th = (const struct tcphdr *)skb->data;
+	ippph = ippp_hdr(skb);
+lookup:
+	sk = __inet_lookup_skb(&tcp_hashinfo, skb, __tcp_hdrlen(th), th->source, th->dest, sdif, &refcounted);
+	if (!sk)
+		goto no_tcp_socket;
+
+process:
+	if (sk->sk_state == TCP_TIME_WAIT)
+		goto do_time_wait;
+
+
+
 	return 0;
+put_and_return:
+	if (refcounted)
+		sock_put(sk);
+
+	return ret;
+
+no_tcp_socket:
+	if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb))
+		goto discard_it;
+
+	// tcp_v4_fill_cb(skb, ippph, th);
+
+	if (tcp_checksum_complete(skb)) {
+csum_error:
+		__TCP_INC_STATS(net, TCP_MIB_CSUMERRORS);
+bad_packet:
+		__TCP_INC_STATS(net, TCP_MIB_INERRS);
+	} else {
+		// tcp_v4_send_reset(NULL, skb);
+	}
+
+discard_it:
+	/* Discard frame. */
+	kfree_skb(skb);
+	return 0;
+
+discard_and_relse:
+	sk_drops_add(sk, skb);
+	if (refcounted)
+		sock_put(sk);
+	goto discard_it;
+
+do_time_wait:
+	if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
+		inet_twsk_put(inet_twsk(sk));
+		goto discard_it;
+	}
+
+	// tcp_v4_fill_cb(skb, iph, th);
+
+	if (tcp_checksum_complete(skb)) {
+		inet_twsk_put(inet_twsk(sk));
+		goto csum_error;
+	}
+	switch (tcp_timewait_state_process(inet_twsk(sk), skb, th)) {
+	case TCP_TW_SYN: {
+		 struct sock *sk2 ;//= inet_lookup_listener(dev_net(skb->dev),
+		// 					&tcp_hashinfo, skb,
+		// 					__tcp_hdrlen(th),
+		// 					ippph->saddr, th->source,
+		// 					ippph->daddr, th->dest,
+		// 					inet_iif(skb),
+		// 					sdif);
+		if (sk2) {
+			inet_twsk_deschedule_put(inet_twsk(sk));
+			sk = sk2;
+			// tcp_v4_restore_cb(skb);
+			refcounted = false;
+			goto process;
+		}
+	}
+		/* to ACK */
+		fallthrough;
+	case TCP_TW_ACK:
+		// tcp_v4_timewait_ack(sk, skb);
+		break;
+	case TCP_TW_RST:
+		// tcp_v4_send_reset(sk, skb);
+		inet_twsk_deschedule_put(inet_twsk(sk));
+		goto discard_it;
+	case TCP_TW_SUCCESS:;
+	}
+	goto discard_it;
 }
 
 const struct inet_connection_sock_af_ops ippp_specific = {
@@ -99,8 +219,8 @@ struct proto tcppp_prot = {
 	// .setsockopt		= tcp_setsockopt,
 	// .getsockopt		= tcp_getsockopt,
 	// .keepalive		= tcp_set_keepalive,
-	// .recvmsg		= tcppp_recvmsg,
-	.sendmsg		= tcppp_sendmsg,
+	.recvmsg		= tcp_recvmsg,
+	.sendmsg		= tcp_sendmsg,
 	// .sendpage		= tcp_sendpage,
 	// .backlog_rcv		= tcp_v4_do_rcv,
 // 	.release_cb		= tcp_release_cb,
