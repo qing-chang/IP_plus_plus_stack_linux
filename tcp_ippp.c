@@ -49,6 +49,41 @@ int tcppp_rcv(struct sk_buff *skb)
 	return 0;
 }
 
+const struct inet_connection_sock_af_ops ippp_specific = {
+	// .queue_xmit	   = inet6_csk_xmit,
+// 	.send_check	   = tcp_v6_send_check,
+// 	.rebuild_header	   = inet6_sk_rebuild_header,
+// 	.sk_rx_dst_set	   = inet6_sk_rx_dst_set,
+// 	.conn_request	   = tcp_v6_conn_request,
+// 	.syn_recv_sock	   = tcp_v6_syn_recv_sock,
+// 	.net_header_len	   = sizeof(struct ipv6hdr),
+// 	.net_frag_header_len = sizeof(struct frag_hdr),
+// 	.setsockopt	   = ipv6_setsockopt,
+// 	.getsockopt	   = ipv6_getsockopt,
+// 	.addr2sockaddr	   = inet6_csk_addr2sockaddr,
+// 	.sockaddr_len	   = sizeof(struct sockaddr_in6),
+// #ifdef CONFIG_COMPAT
+// 	.compat_setsockopt = compat_ipv6_setsockopt,
+// 	.compat_getsockopt = compat_ipv6_getsockopt,
+// #endif
+// 	.mtu_reduced	   = tcp_v6_mtu_reduced,
+};
+
+static int tcppp_init_sock(struct sock *sk)
+{
+	struct inet_connection_sock *icsk = inet_csk(sk);
+
+	tcp_init_sock(sk);
+
+	icsk->icsk_af_ops = &ippp_specific;
+
+// #ifdef CONFIG_TCP_MD5SIG
+// 	tcp_sk(sk)->af_specific = &tcp_sock_ipv6_specific;
+// #endif
+
+	return 0;
+}
+
 struct proto tcppp_prot = {
 	.name			= "TCPPP",
 	.owner			= THIS_MODULE,
@@ -58,20 +93,20 @@ struct proto tcppp_prot = {
 	// .disconnect		= tcp_disconnect,
 	// .accept			= inet_csk_accept,
 	// .ioctl			= tcp_ioctl,
-	// .init			= tcp_v4_init_sock,
+	.init			= tcppp_init_sock,
 	// .destroy		= tcp_v4_destroy_sock,
 	// .shutdown		= tcp_shutdown,
 	// .setsockopt		= tcp_setsockopt,
 	// .getsockopt		= tcp_getsockopt,
 	// .keepalive		= tcp_set_keepalive,
-	// .recvmsg		= tcp_recvmsg,
+	// .recvmsg		= tcppp_recvmsg,
 	.sendmsg		= tcppp_sendmsg,
 	// .sendpage		= tcp_sendpage,
 	// .backlog_rcv		= tcp_v4_do_rcv,
 // 	.release_cb		= tcp_release_cb,
 // 	.hash			= inet_hash,
 // 	.unhash			= inet_unhash,
-// 	.get_port		= inet_csk_get_port,
+	.get_port		= inet_csk_get_port,
 // 	.enter_memory_pressure	= tcp_enter_memory_pressure,
 // 	.leave_memory_pressure	= tcp_leave_memory_pressure,
 // 	.stream_memory_free	= tcp_stream_memory_free,
@@ -83,7 +118,7 @@ struct proto tcppp_prot = {
 // 	.sysctl_wmem_offset	= offsetof(struct net, ipv4.sysctl_tcp_wmem),
 // 	.sysctl_rmem_offset	= offsetof(struct net, ipv4.sysctl_tcp_rmem),
 // 	.max_header		= MAX_TCP_HEADER,
-	.obj_size		= sizeof(struct tcp_sock),
+	.obj_size		= sizeof(struct tcppp_sock),
 // 	.slab_flags		= SLAB_TYPESAFE_BY_RCU,
 // 	.twsk_prot		= &tcp_timewait_sock_ops,
 // 	.rsk_prot		= &tcp_request_sock_ops,

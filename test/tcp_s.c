@@ -12,7 +12,7 @@
 int main()
 {
      struct sockaddr_ippp local_sockaddr,remote_sockaddr;
-     int fd = socket(PF_INETPP,SOCK_DGRAM, 0);
+     int fd = socket(PF_INETPP,SOCK_STREAM, 0);
      memset(&local_sockaddr,0,sizeof(struct sockaddr_ippp));
      local_sockaddr.sin_family = PF_INETPP;
      local_sockaddr.sin_port = htons(8888);
