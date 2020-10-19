@@ -1287,12 +1287,12 @@ int __init udppp_init(void)
 	ret = inetpp_register_protosw(&udppp_protosw);
 	if (ret)
 		goto out_udppp_protocol;
-	goto out;
+out:
+	return ret;
 
 out_udppp_protocol:
 	inetpp_del_protocol(&udppp_protocol, IPPROTO_UDP);
-out:
-	return ret;
+	goto out;
 }
 
 void udppp_exit(void)

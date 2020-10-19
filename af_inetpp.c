@@ -380,14 +380,14 @@ const struct proto_ops inetpp_stream_ops = {
 	.owner		   = THIS_MODULE,
 	.release	   = inetpp_release,
 	.bind		   = inetpp_bind,
-//	.connect	   = inet_stream_connect,	
+	.connect	   = inet_stream_connect,
 //	.socketpair	   = sock_no_socketpair,	
-//	.accept		   = inet_accept,		
+	.accept		   = inet_accept,
 //	.getname	   = inet6_getname,
 //	.poll		   = tcp_poll,			
 //	.ioctl		   = inet6_ioctl,		
 //	.gettstamp	   = sock_gettstamp,
-//	.listen		   = inet_listen,		
+	.listen		   = inet_listen,
 	.shutdown	   = inet_shutdown,		
 //	.setsockopt	   = sock_common_setsockopt,	
 //	.getsockopt	   = sock_common_getsockopt,	
@@ -547,15 +547,15 @@ static int __init inetpp_init(void)
 
 	dev_add_pack(&ippp_packet_type);
 	printk(KERN_INFO "ippp inserted\n");
-	goto out;
+out:
+	return err;
 tcppp_fail:
 
 udppp_fail:
 	return err;
 out_unregister_tcp_proto:
 	proto_unregister(&tcppp_prot);
-out:
-	return err;
+	goto out;
 }
 
 static void __exit inetpp_exit(void)
