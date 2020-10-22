@@ -40,15 +40,15 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	struct sockaddr_ippp *usin = (struct sockaddr_ippp *) uaddr;
 	struct inet_sock *inet = inet_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
-	// struct ipv6_pinfo *np = tcp_inet6_sk(sk);
+	struct ippp_pinfo *np = tcp_inetpp_sk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
-	struct in6_addr *saddr = NULL, *final_p, final;
-	struct ipv6_txoptions *opt;
+	__be16 orig_sport, orig_dport;
+	__be32 daddr, nexthop;
 	struct flowi6 fl6;
 	struct dst_entry *dst;
 	int addr_type;
 	int err;
-// 	struct inet_timewait_death_row *tcp_death_row = &sock_net(sk)->ipv4.tcp_death_row;
+	struct inet_timewait_death_row *tcp_death_row = &sock_net(sk)->ipv4.tcp_death_row;
 
 	if (addr_len < sizeof(struct sockaddr_ippp))
 		return -EINVAL;
@@ -56,153 +56,71 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	if (usin->sin_family != AF_INETPP)
 		return -EAFNOSUPPORT;
 
-// 	memset(&fl6, 0, sizeof(fl6));
+	// struct rtable *rt;
+	// struct ip_options_rcu *inet_opt;
 
-// 	if (np->sndflow) {
-// 		fl6.flowlabel = usin->sin6_flowinfo&IPV6_FLOWINFO_MASK;
-// 		IP6_ECN_flow_init(fl6.flowlabel);
-// 		if (fl6.flowlabel&IPV6_FLOWLABEL_MASK) {
-// 			struct ip6_flowlabel *flowlabel;
-// 			flowlabel = fl6_sock_lookup(sk, fl6.flowlabel);
-// 			if (IS_ERR(flowlabel))
-// 				return -EINVAL;
-// 			fl6_sock_release(flowlabel);
-// 		}
-// 	}
 
-// 	/*
-// 	 *	connect() to INADDR_ANY means loopback (BSD'ism).
-// 	 */
+	// nexthop = daddr = usin->sin_addr.s_addr;
+	// inet_opt = rcu_dereference_protected(inet->inet_opt,
+	// 				     lockdep_sock_is_held(sk));
+	// if (inet_opt && inet_opt->opt.srr) {
+	// 	if (!daddr)
+	// 		return -EINVAL;
+	// 	nexthop = inet_opt->opt.faddr;
+	// }
 
-// 	if (ipv6_addr_any(&usin->sin6_addr)) {
-// 		if (ipv6_addr_v4mapped(&sk->sk_v6_rcv_saddr))
-// 			ipv6_addr_set_v4mapped(htonl(INADDR_LOOPBACK),
-// 					       &usin->sin6_addr);
-// 		else
-// 			usin->sin6_addr = in6addr_loopback;
-// 	}
+	// orig_sport = inet->inet_sport;
+	// orig_dport = usin->sin_port;
+	// fl4 = &inet->cork.fl.u.ip4;
+	// rt = ip_route_connect(fl4, nexthop, inet->inet_saddr,
+	// 		      RT_CONN_FLAGS(sk), sk->sk_bound_dev_if,
+	// 		      IPPROTO_TCP,
+	// 		      orig_sport, orig_dport, sk);
+	// if (IS_ERR(rt)) {
+	// 	err = PTR_ERR(rt);
+	// 	if (err == -ENETUNREACH)
+	// 		IP_INC_STATS(sock_net(sk), IPSTATS_MIB_OUTNOROUTES);
+	// 	return err;
+	// }
 
-// 	addr_type = ipv6_addr_type(&usin->sin6_addr);
+	// if (rt->rt_flags & (RTCF_MULTICAST | RTCF_BROADCAST)) {
+	// 	ip_rt_put(rt);
+	// 	return -ENETUNREACH;
+	// }
 
-// 	if (addr_type & IPV6_ADDR_MULTICAST)
-// 		return -ENETUNREACH;
+	// if (!inet_opt || !inet_opt->opt.srr)
+	// 	daddr = fl4->daddr;
 
-// 	if (addr_type&IPV6_ADDR_LINKLOCAL) {
-// 		if (addr_len >= sizeof(struct sockaddr_in6) &&
-// 		    usin->sin6_scope_id) {
-// 			/* If interface is set while binding, indices
-// 			 * must coincide.
-// 			 */
-// 			if (!sk_dev_equal_l3scope(sk, usin->sin6_scope_id))
-// 				return -EINVAL;
+	// if (!inet->inet_saddr)
+	// 	inet->inet_saddr = fl4->saddr;
+	// sk_rcv_saddr_set(sk, inet->inet_saddr);
 
-// 			sk->sk_bound_dev_if = usin->sin6_scope_id;
-// 		}
+	// if (tp->rx_opt.ts_recent_stamp && inet->inet_daddr != daddr) {
+	// 	/* Reset inherited state */
+	// 	tp->rx_opt.ts_recent	   = 0;
+	// 	tp->rx_opt.ts_recent_stamp = 0;
+	// 	if (likely(!tp->repair))
+	// 		WRITE_ONCE(tp->write_seq, 0);
+	// }
 
-// 		/* Connect to link-local address requires an interface */
-// 		if (!sk->sk_bound_dev_if)
-// 			return -EINVAL;
-// 	}
+	// inet->inet_dport = usin->sin_port;
+	// sk_daddr_set(sk, daddr);
 
-// 	if (tp->rx_opt.ts_recent_stamp &&
-// 	    !ipv6_addr_equal(&sk->sk_v6_daddr, &usin->sin6_addr)) {
-// 		tp->rx_opt.ts_recent = 0;
-// 		tp->rx_opt.ts_recent_stamp = 0;
-// 		WRITE_ONCE(tp->write_seq, 0);
-// 	}
+	// inet_csk(sk)->icsk_ext_hdr_len = 0;
+	// if (inet_opt)
+	// 	inet_csk(sk)->icsk_ext_hdr_len = inet_opt->opt.optlen;
 
-// 	sk->sk_v6_daddr = usin->sin6_addr;
-// 	np->flow_label = fl6.flowlabel;
+	// tp->rx_opt.mss_clamp = TCP_MSS_DEFAULT;
 
-// 	/*
-// 	 *	TCP over IPv4
-// 	 */
-
-// 	if (addr_type & IPV6_ADDR_MAPPED) {
-// 		u32 exthdrlen = icsk->icsk_ext_hdr_len;
-// 		struct sockaddr_in sin;
-
-// 		if (__ipv6_only_sock(sk))
-// 			return -ENETUNREACH;
-
-// 		sin.sin_family = AF_INET;
-// 		sin.sin_port = usin->sin6_port;
-// 		sin.sin_addr.s_addr = usin->sin6_addr.s6_addr32[3];
-
-// 		icsk->icsk_af_ops = &ipv6_mapped;
-// 		if (sk_is_mptcp(sk))
-// 			mptcpv6_handle_mapped(sk, true);
-// 		sk->sk_backlog_rcv = tcp_v4_do_rcv;
-// #ifdef CONFIG_TCP_MD5SIG
-// 		tp->af_specific = &tcp_sock_ipv6_mapped_specific;
-// #endif
-
-// 		err = tcp_v4_connect(sk, (struct sockaddr *)&sin, sizeof(sin));
-
-// 		if (err) {
-// 			icsk->icsk_ext_hdr_len = exthdrlen;
-// 			icsk->icsk_af_ops = &ipv6_specific;
-// 			if (sk_is_mptcp(sk))
-// 				mptcpv6_handle_mapped(sk, false);
-// 			sk->sk_backlog_rcv = tcp_v6_do_rcv;
-// #ifdef CONFIG_TCP_MD5SIG
-// 			tp->af_specific = &tcp_sock_ipv6_specific;
-// #endif
-// 			goto failure;
-// 		}
-// 		np->saddr = sk->sk_v6_rcv_saddr;
-
-// 		return err;
-// 	}
-
-// 	if (!ipv6_addr_any(&sk->sk_v6_rcv_saddr))
-// 		saddr = &sk->sk_v6_rcv_saddr;
-
-// 	fl6.flowi6_proto = IPPROTO_TCP;
-// 	fl6.daddr = sk->sk_v6_daddr;
-// 	fl6.saddr = saddr ? *saddr : np->saddr;
-// 	fl6.flowi6_oif = sk->sk_bound_dev_if;
-// 	fl6.flowi6_mark = sk->sk_mark;
-// 	fl6.fl6_dport = usin->sin6_port;
-// 	fl6.fl6_sport = inet->inet_sport;
-// 	fl6.flowi6_uid = sk->sk_uid;
-
-// 	opt = rcu_dereference_protected(np->opt, lockdep_sock_is_held(sk));
-// 	final_p = fl6_update_dst(&fl6, opt, &final);
-
-// 	security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
-
-// 	dst = ip6_dst_lookup_flow(sock_net(sk), sk, &fl6, final_p);
-// 	if (IS_ERR(dst)) {
-// 		err = PTR_ERR(dst);
-// 		goto failure;
-// 	}
-
-// 	if (!saddr) {
-// 		saddr = &fl6.saddr;
-// 		sk->sk_v6_rcv_saddr = *saddr;
-// 	}
-
-// 	/* set the source address */
-// 	np->saddr = *saddr;
-// 	inet->inet_rcv_saddr = LOOPBACK4_IPV6;
-
-// 	sk->sk_gso_type = SKB_GSO_TCPV6;
-// 	ip6_dst_store(sk, dst, NULL, NULL);
-
-// 	icsk->icsk_ext_hdr_len = 0;
-// 	if (opt)
-// 		icsk->icsk_ext_hdr_len = opt->opt_flen +
-// 					 opt->opt_nflen;
-
-// 	tp->rx_opt.mss_clamp = IPV6_MIN_MTU - sizeof(struct tcphdr) - sizeof(struct ipv6hdr);
-
-// 	inet->inet_dport = usin->sin6_port;
-
+	/* Socket identity is still unknown (sport may be zero).
+	 * However we set state to SYN-SENT and not releasing socket
+	 * lock select source port, enter ourselves into the hash tables and
+	 * complete initialization after this.
+	 */
 	tcp_set_state(sk, TCP_SYN_SENT);
-// 	err = inet6_hash_connect(tcp_death_row, sk);
-// 	if (err)
-// 		goto late_failure;
+	err = inetpp_hash_connect(tcp_death_row, sk);
+	if (err)
+		goto late_failure;
 
 // 	sk_set_txhash(sk);
 

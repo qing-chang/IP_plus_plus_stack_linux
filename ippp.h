@@ -111,6 +111,7 @@ struct tcppp_sock {
 	struct ippp_pinfo inetpp;
 };
 
+int inetpp_hash_connect(struct inet_timewait_death_row *death_row, struct sock *sk);
 int tcppp_rcv(struct sk_buff *skb);
 int tcppp_init(void);
 void tcppp_exit(void);
@@ -172,6 +173,13 @@ static inline u32 hdr_len(const struct ippphdr *ippph)
 static inline struct udppp_sock *udppp_sk(const struct sock *sk)
 {
 	return (struct udppp_sock *)sk;
+}
+
+static struct ippp_pinfo *tcp_inetpp_sk(const struct sock *sk)
+{
+	unsigned int offset = sizeof(struct tcppp_sock) - sizeof(struct ippp_pinfo);
+
+	return (struct ippp_pinfo *)(((u8 *)sk) + offset);
 }
 
 // __u32 addr_pp_to_v4(struct ippp_addr addr_pp)
