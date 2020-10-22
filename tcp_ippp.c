@@ -37,10 +37,10 @@
 
 static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 {
-	struct sockaddr_in6 *usin = (struct sockaddr_in6 *) uaddr;
+	struct sockaddr_ippp *usin = (struct sockaddr_ippp *) uaddr;
 	struct inet_sock *inet = inet_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
-	struct ipv6_pinfo *np = tcp_inet6_sk(sk);
+	// struct ipv6_pinfo *np = tcp_inet6_sk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct in6_addr *saddr = NULL, *final_p, final;
 	struct ipv6_txoptions *opt;
@@ -50,11 +50,11 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	int err;
 // 	struct inet_timewait_death_row *tcp_death_row = &sock_net(sk)->ipv4.tcp_death_row;
 
-// 	if (addr_len < SIN6_LEN_RFC2133)
-// 		return -EINVAL;
+	if (addr_len < sizeof(struct sockaddr_ippp))
+		return -EINVAL;
 
-// 	if (usin->sin6_family != AF_INET6)
-// 		return -EAFNOSUPPORT;
+	if (usin->sin_family != AF_INETPP)
+		return -EAFNOSUPPORT;
 
 // 	memset(&fl6, 0, sizeof(fl6));
 
@@ -199,7 +199,7 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 
 // 	inet->inet_dport = usin->sin6_port;
 
-// 	tcp_set_state(sk, TCP_SYN_SENT);
+	tcp_set_state(sk, TCP_SYN_SENT);
 // 	err = inet6_hash_connect(tcp_death_row, sk);
 // 	if (err)
 // 		goto late_failure;
@@ -223,9 +223,9 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 // 	if (err)
 // 		goto late_failure;
 
-// 	err = tcp_connect(sk);
-// 	if (err)
-// 		goto late_failure;
+	err = tcp_connect(sk);
+	if (err)
+		goto late_failure;
 
 	return 0;
 
