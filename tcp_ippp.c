@@ -44,10 +44,12 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	struct tcp_sock *tp = tcp_sk(sk);
 	__be16 orig_sport, orig_dport;
 	__be32 daddr, nexthop;
-	struct flowi6 fl6;
+	struct flowipp flpp;
 	struct dst_entry *dst;
+	struct rtable *rt;
 	int addr_type;
 	int err;
+	struct ip_options_rcu *inet_opt;
 	struct inet_timewait_death_row *tcp_death_row = &sock_net(sk)->ipv4.tcp_death_row;
 
 	if (addr_len < sizeof(struct sockaddr_ippp))
@@ -55,10 +57,6 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 
 	if (usin->sin_family != AF_INETPP)
 		return -EAFNOSUPPORT;
-
-	// struct rtable *rt;
-	// struct ip_options_rcu *inet_opt;
-
 
 	// nexthop = daddr = usin->sin_addr.s_addr;
 	// inet_opt = rcu_dereference_protected(inet->inet_opt,
@@ -69,8 +67,8 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	// 	nexthop = inet_opt->opt.faddr;
 	// }
 
-	// orig_sport = inet->inet_sport;
-	// orig_dport = usin->sin_port;
+	orig_sport = inet->inet_sport;
+	orig_dport = usin->sin_port;
 	// fl4 = &inet->cork.fl.u.ip4;
 	// rt = ip_route_connect(fl4, nexthop, inet->inet_saddr,
 	// 		      RT_CONN_FLAGS(sk), sk->sk_bound_dev_if,
@@ -120,38 +118,56 @@ static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	tcp_set_state(sk, TCP_SYN_SENT);
 	err = inetpp_hash_connect(tcp_death_row, sk);
 	if (err)
-		goto late_failure;
+		goto failure;
 
-// 	sk_set_txhash(sk);
+	// sk_set_txhash(sk);
 
-// 	if (likely(!tp->repair)) {
-// 		if (!tp->write_seq)
-// 			WRITE_ONCE(tp->write_seq,
-// 				   secure_tcpv6_seq(np->saddr.s6_addr32,
-// 						    sk->sk_v6_daddr.s6_addr32,
-// 						    inet->inet_sport,
-// 						    inet->inet_dport));
-// 		tp->tsoffset = secure_tcpv6_ts_off(sock_net(sk),
-// 						   np->saddr.s6_addr32,
-// 						   sk->sk_v6_daddr.s6_addr32);
-// 	}
+	// rt = ip_route_newports(fl4, rt, orig_sport, orig_dport,
+	// 		       inet->inet_sport, inet->inet_dport, sk);
+	// if (IS_ERR(rt)) {
+	// 	err = PTR_ERR(rt);
+	// 	rt = NULL;
+	// 	goto failure;
+	// }
+	// /* OK, now commit destination to socket.  */
+	// sk->sk_gso_type = SKB_GSO_TCPV4;
+	// sk_setup_caps(sk, &rt->dst);
+	// rt = NULL;
 
-// 	if (tcp_fastopen_defer_connect(sk, &err))
-// 		return err;
-// 	if (err)
-// 		goto late_failure;
+	// if (likely(!tp->repair)) {
+	// 	if (!tp->write_seq)
+	// 		WRITE_ONCE(tp->write_seq,
+	// 			   secure_tcp_seq(inet->inet_saddr,
+	// 					  inet->inet_daddr,
+	// 					  inet->inet_sport,
+	// 					  usin->sin_port));
+	// 	tp->tsoffset = secure_tcp_ts_off(sock_net(sk),
+	// 					 inet->inet_saddr,
+	// 					 inet->inet_daddr);
+	// }
+
+	// inet->inet_id = prandom_u32();
+
+	// if (tcp_fastopen_defer_connect(sk, &err))
+	// 	return err;
+	if (err)
+		goto failure;
 
 	err = tcp_connect(sk);
 	if (err)
-		goto late_failure;
+		goto failure;
 
 	return 0;
 
-late_failure:
-	tcp_set_state(sk, TCP_CLOSE);
 failure:
-	inet->inet_dport = 0;
+	/*
+	 * This unhashes the socket and releases the local port,
+	 * if necessary.
+	 */
+	tcp_set_state(sk, TCP_CLOSE);
+	ip_rt_put(rt);
 	sk->sk_route_caps = 0;
+	inet->inet_dport = 0;
 	return err;
 }
 

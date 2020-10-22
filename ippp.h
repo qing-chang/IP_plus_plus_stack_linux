@@ -111,6 +111,34 @@ struct tcppp_sock {
 	struct ippp_pinfo inetpp;
 };
 
+struct flowipp {
+	struct flowi_common	__fl_common;
+#define flowi4_oif		__fl_common.flowic_oif
+#define flowi4_iif		__fl_common.flowic_iif
+#define flowi4_mark		__fl_common.flowic_mark
+#define flowi4_tos		__fl_common.flowic_tos
+#define flowi4_scope		__fl_common.flowic_scope
+#define flowi4_proto		__fl_common.flowic_proto
+#define flowi4_flags		__fl_common.flowic_flags
+#define flowi4_secid		__fl_common.flowic_secid
+#define flowi4_tun_key		__fl_common.flowic_tun_key
+#define flowi4_uid		__fl_common.flowic_uid
+#define flowi4_multipath_hash	__fl_common.flowic_multipath_hash
+
+	/* (saddr,daddr) must be grouped, same order as in IP header */
+	__be32			saddr;
+	__be32			daddr;
+
+	union flowi_uli		uli;
+#define fl4_sport		uli.ports.sport
+#define fl4_dport		uli.ports.dport
+#define fl4_icmp_type		uli.icmpt.type
+#define fl4_icmp_code		uli.icmpt.code
+#define fl4_ipsec_spi		uli.spi
+#define fl4_mh_type		uli.mht.type
+#define fl4_gre_key		uli.gre_key
+} __attribute__((__aligned__(BITS_PER_LONG/8)));
+
 int inetpp_hash_connect(struct inet_timewait_death_row *death_row, struct sock *sk);
 int tcppp_rcv(struct sk_buff *skb);
 int tcppp_init(void);
