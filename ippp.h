@@ -111,7 +111,6 @@ struct tcppp_sock {
 	struct ippp_pinfo inetpp;
 };
 
-int tcppp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size);
 int tcppp_rcv(struct sk_buff *skb);
 int tcppp_init(void);
 void tcppp_exit(void);
