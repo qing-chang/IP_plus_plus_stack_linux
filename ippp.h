@@ -139,6 +139,8 @@ struct flowipp {
 #define fl4_gre_key		uli.gre_key
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
 
+int inetpp_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl);
+static int tcppp_conn_request(struct sock *sk, struct sk_buff *skb);
 int inetpp_hash_connect(struct inet_timewait_death_row *death_row, struct sock *sk);
 int tcppp_rcv(struct sk_buff *skb);
 int tcppp_init(void);

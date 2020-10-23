@@ -35,6 +35,96 @@
 #include <trace/events/tcp.h>
 #include "ippp.h"
 
+int inetpp_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl)
+{
+	int tos = inet_sk(sk)->tos;
+	struct inet_sock *inet = inet_sk(sk);
+	struct net *net = sock_net(sk);
+	struct ip_options_rcu *inet_opt;
+	struct flowi4 *fl4;
+	struct rtable *rt;
+	struct iphdr *iph;
+	int res;
+
+	/* Skip all of this if the packet is already routed,
+	 * f.e. by something like SCTP.
+	 */
+	rcu_read_lock();
+	inet_opt = rcu_dereference(inet->inet_opt);
+	fl4 = &fl->u.ip4;
+	rt = skb_rtable(skb);
+	if (rt)
+		goto packet_routed;
+
+	/* Make sure we can route this packet. */
+	rt = (struct rtable *)__sk_dst_check(sk, 0);
+	if (!rt) {
+		__be32 daddr;
+
+		/* Use correct destination address if we have options. */
+		daddr = inet->inet_daddr;
+		if (inet_opt && inet_opt->opt.srr)
+			daddr = inet_opt->opt.faddr;
+
+		/* If this fails, retransmit mechanism of transport layer will
+		 * keep trying until route appears or the connection times
+		 * itself out.
+		 */
+		rt = ip_route_output_ports(net, fl4, sk,
+					   daddr, inet->inet_saddr,
+					   inet->inet_dport,
+					   inet->inet_sport,
+					   sk->sk_protocol,
+					   RT_CONN_FLAGS_TOS(sk, tos),
+					   sk->sk_bound_dev_if);
+		if (IS_ERR(rt))
+			goto no_route;
+		sk_setup_caps(sk, &rt->dst);
+	}
+	skb_dst_set_noref(skb, &rt->dst);
+
+packet_routed:
+	if (inet_opt && inet_opt->opt.is_strictroute && rt->rt_uses_gateway)
+		goto no_route;
+
+	/* OK, we know where to send it, allocate and build IP header. */
+	skb_push(skb, sizeof(struct iphdr) + (inet_opt ? inet_opt->opt.optlen : 0));
+	skb_reset_network_header(skb);
+	iph = ip_hdr(skb);
+	*((__be16 *)iph) = htons((4 << 12) | (5 << 8) | (tos & 0xff));
+	if (ip_dont_fragment(sk, &rt->dst) && !skb->ignore_df)
+		iph->frag_off = htons(IP_DF);
+	else
+		iph->frag_off = 0;
+	// iph->ttl      = ip_select_ttl(inet, &rt->dst);
+	iph->protocol = sk->sk_protocol;
+	// ip_copy_addrs(iph, fl4);
+
+	/* Transport layer set skb->h.foo itself. */
+
+	if (inet_opt && inet_opt->opt.optlen) {
+		iph->ihl += inet_opt->opt.optlen >> 2;
+		// ip_options_build(skb, &inet_opt->opt, inet->inet_daddr, rt, 0);
+	}
+
+	ip_select_ident_segs(net, skb, sk,
+			     skb_shinfo(skb)->gso_segs ?: 1);
+
+	/* TODO : should we use skb->sk here instead of sk ? */
+	skb->priority = sk->sk_priority;
+	skb->mark = sk->sk_mark;
+
+	res = ip_local_out(net, sk, skb);
+	rcu_read_unlock();
+	return res;
+
+no_route:
+	rcu_read_unlock();
+	IP_INC_STATS(net, IPSTATS_MIB_OUTNOROUTES);
+	kfree_skb(skb);
+	return -EHOSTUNREACH;
+}
+
 static int tcppp_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 {
 	struct sockaddr_ippp *usin = (struct sockaddr_ippp *) uaddr;
@@ -171,6 +261,48 @@ failure:
 	return err;
 }
 
+struct request_sock_ops tcppp_request_sock_ops __read_mostly = {
+	.family		=	PF_INET,
+	.obj_size	=	sizeof(struct tcp_request_sock),
+	.rtx_syn_ack	=	tcp_rtx_synack,
+	// .send_ack	=	tcp_v4_reqsk_send_ack,
+	// .destructor	=	tcp_v4_reqsk_destructor,
+	// .send_reset	=	tcp_v4_send_reset,
+	.syn_ack_timeout =	tcp_syn_ack_timeout,
+};
+
+const struct tcp_request_sock_ops tcp_request_sock_ippp_ops = {
+	.mss_clamp	=	TCP_MSS_DEFAULT,
+#ifdef CONFIG_TCP_MD5SIG
+	.req_md5_lookup	=	tcp_v4_md5_lookup,
+	.calc_md5_hash	=	tcp_v4_md5_hash_skb,
+#endif
+	// .init_req	=	tcp_v4_init_req,
+#ifdef CONFIG_SYN_COOKIES
+	// .cookie_init_seq =	cookie_v4_init_sequence,
+#endif
+	// .route_req	=	tcp_v4_route_req,
+	// .init_seq	=	tcp_v4_init_seq,
+	// .init_ts_off	=	tcp_v4_init_ts_off,
+	// .send_synack	=	tcp_v4_send_synack,
+};
+
+static int tcppp_conn_request(struct sock *sk, struct sk_buff *skb)
+{
+	if (skb->protocol == htons(ETH_P_IP))
+		return tcp_v4_conn_request(sk, skb);
+
+	// if (!ipv6_unicast_destination(skb))
+	// 	goto drop;
+
+	return tcp_conn_request(&tcppp_request_sock_ops,
+				&tcp_request_sock_ippp_ops, sk, skb);
+
+drop:
+	tcp_listendrop(sk);
+	return 0; /* don't send reset */
+}
+
 int tcppp_rcv(struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb->dev);
@@ -297,11 +429,11 @@ do_time_wait:
 }
 
 const struct inet_connection_sock_af_ops ippp_specific = {
-	// .queue_xmit	   = inet6_csk_xmit,
+	.queue_xmit	   = inetpp_queue_xmit,
 // 	.send_check	   = tcp_v6_send_check,
 // 	.rebuild_header	   = inet6_sk_rebuild_header,
 // 	.sk_rx_dst_set	   = inet6_sk_rx_dst_set,
-// 	.conn_request	   = tcp_v6_conn_request,
+	.conn_request	   = tcppp_conn_request,
 // 	.syn_recv_sock	   = tcp_v6_syn_recv_sock,
 // 	.net_header_len	   = sizeof(struct ipv6hdr),
 // 	.net_frag_header_len = sizeof(struct frag_hdr),
